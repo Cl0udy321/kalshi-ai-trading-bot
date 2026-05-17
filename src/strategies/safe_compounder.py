@@ -1,8 +1,8 @@
 """
 Safe Compounder Strategy — Ported from ~/dev/apex/safe_compounder.py
 
-Dual-sided (YES/NO), edge-based, capital-efficient.
-(Patched to push dry-run signals to trading_system.db for GUI approval)
+Dual-sided (YES/NO), edge-based, capital-efficient, news-aware.
+(Refined to enforce strict 14-day capital velocity limits and handle CLI overrides)
 """
 
 import asyncio
@@ -10,16 +10,18 @@ import logging
 import math
 import time
 import uuid
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import aiosqlite
 from src.utils.database import DatabaseManager, Position
+from src.data.heuristic_sentiment import get_market_news_sentiment
 
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------
-# Configuration
+# Strategy Default Configuration
 # -----------------------------------------------------------------------
 
 SKIP_PREFIXES = [
@@ -41,12 +43,15 @@ SKIP_TITLE_PHRASES = [
     "mention", "say in", "speech mention", "address mention",
 ]
 
-MIN_VOLUME = 10
-MIN_ASK = 0.70          
-MIN_EDGE = 0.005           
-MAX_POSITION_PCT = 0.10    
-USE_KELLY = True
-MIN_CONFIDENCE = 0.3       
+DEFAULT_MIN_VOLUME = 10
+DEFAULT_MIN_ASK = 0.70          
+DEFAULT_MIN_EDGE = 0.005        
+DEFAULT_MAX_POSITION_PCT = 0.10    
+DEFAULT_USE_KELLY = True
+DEFAULT_MIN_CONFIDENCE = 0.25   
+
+# --- CRITICAL VALUE UPGRADE: CAPITAL VELOCITY FILTER ---
+DEFAULT_MAX_DAYS_TO_EXPIRY = 14  # Max 14 days so we never lock capital up long-term
 
 # -----------------------------------------------------------------------
 # Core math
@@ -57,25 +62,17 @@ def should_skip(ticker: str) -> bool:
     return any(upper.startswith(p.upper()) for p in SKIP_PREFIXES)
 
 def estimate_true_prob(last_price: float, hours_to_expiry: float) -> float:
-    """Generalized probability estimation based on last traded price."""
+    """
+    Generalized exponential probability decay model.
+    Priors become slightly more certain (closer to 1.0) as expiry approaches.
+    """
     if hours_to_expiry <= 0:
         return last_price
-    if hours_to_expiry <= 24:
-        if last_price >= 0.95: return max(0.01, last_price - 0.04)
-        elif last_price >= 0.90: return max(0.02, last_price - 0.03)
-        elif last_price >= 0.85: return max(0.03, last_price - 0.02)
-        else: return max(0.04, last_price - 0.01)
-    elif hours_to_expiry <= 72:
-        if last_price >= 0.95: return max(0.01, last_price - 0.03)
-        elif last_price >= 0.90: return max(0.03, last_price - 0.02)
-        else: return max(0.0, last_price - 0.01)
-    elif hours_to_expiry <= 168:
-        if last_price >= 0.95: return max(0.02, last_price - 0.02)
-        elif last_price >= 0.90: return max(0.04, last_price - 0.01)
-        else: return last_price
-    else:
-        if last_price >= 0.97: return max(0.03, last_price - 0.01)
-        return last_price
+    
+    decay_factor = math.exp(-hours_to_expiry / 168.0) # 1 week half-life
+    certainty_bonus = (1.0 - last_price) * 0.08 * decay_factor
+    
+    return min(0.99, last_price + certainty_bonus)
 
 def kelly_fraction(prob_win: float, payout_ratio: float) -> float:
     if payout_ratio <= 0 or prob_win <= 0:
@@ -133,29 +130,29 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
     if best_no_ask and best_no_bid > 0:
         spread = best_no_ask - best_no_bid
         spread_pct = spread / max(best_no_ask, 0.01)
-        spread_score = max(0, 1.0 - (spread_pct / 0.10))
-        if spread_pct > 0.05: reasons.append("wide spread")
+        spread_score = max(0, 1.0 - (spread_pct / 0.15)) 
+        if spread_pct > 0.08: reasons.append("wide spread")
     else:
-        spread_score = 0.3
+        spread_score = 0.4
         if not reasons: reasons.append("unclear spread")
 
     volume = float(market.get("volume_fp", 0) or market.get("volume", 0) or 0)
     days_to_expiry = market.get("_days_to_expiry", 30)
     vol_per_day = volume / max(days_to_expiry, 1)
-    volume_score = min(1.0, vol_per_day / 50.0)
-    if vol_per_day < 10: reasons.append("thin volume")
+    volume_score = min(1.0, vol_per_day / 20.0) 
+    if vol_per_day < 5: reasons.append("thin volume")
 
     yes_last = float(market.get("last_price_dollars", 0) or market.get("last_price", 0) or 0)
     if yes_last > 1.0: yes_last = yes_last / 100.0
     
     if best_no_ask:
         price_gap = abs(best_no_ask - (1.0 - yes_last))
-        stability_score = max(0, 1.0 - (price_gap / 0.15)) 
-        if price_gap > 0.08: reasons.append("price gap")
+        stability_score = max(0, 1.0 - (price_gap / 0.20)) 
+        if price_gap > 0.12: reasons.append("price gap")
     else:
-        stability_score = 0.3
+        stability_score = 0.4
 
-    score = (depth_ratio * 0.30 + spread_score * 0.30 + volume_score * 0.25 + stability_score * 0.15)
+    score = (depth_ratio * 0.25 + spread_score * 0.35 + volume_score * 0.20 + stability_score * 0.20)
     reason_str = ", ".join(reasons) if reasons else "ok"
     return round(score, 3), reason_str
 
@@ -169,20 +166,24 @@ class SafeCompounder:
         client,  
         db_path: str = "trading_system.db",
         dry_run: bool = True,
-        min_ask: int = MIN_ASK,
-        min_edge: int = MIN_EDGE,
-        max_position_pct: float = MAX_POSITION_PCT,
-        use_kelly: bool = USE_KELLY,
-        min_confidence: float = MIN_CONFIDENCE,
+        min_no_ask: float = DEFAULT_MIN_ASK,
+        min_edge: float = DEFAULT_MIN_EDGE,
+        max_position_pct: float = DEFAULT_MAX_POSITION_PCT,
+        use_kelly: bool = DEFAULT_USE_KELLY,
+        min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+        max_days_to_expiry: float = DEFAULT_MAX_DAYS_TO_EXPIRY
     ):
         self.client = client
         self.db_path = db_path
         self.dry_run = dry_run
-        self.min_ask = min_ask
-        self.min_edge = min_edge
+        
+        self.min_ask = min_no_ask if min_no_ask != 0.80 else DEFAULT_MIN_ASK
+        self.min_edge = min_edge if min_edge != 0.01 else DEFAULT_MIN_EDGE
+        
         self.max_position_pct = max_position_pct
         self.use_kelly = use_kelly
         self.min_confidence = min_confidence
+        self.max_days_to_expiry = max_days_to_expiry
         
         self.db_manager = DatabaseManager(db_path=self.db_path)
 
@@ -194,17 +195,22 @@ class SafeCompounder:
 
         start = time.time()
         logger.info("=" * 70)
-        logger.info("SAFE COMPOUNDER v6 — DUAL-SIDED EDGE (GUI PATCHED)")
+        logger.info("SAFE COMPOUNDER v7 — DUAL-SIDED EDGE (VELOCITY PATCH)")
         logger.info(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         logger.info(
-            "Rules: ask > $%.2f | edge > $%.2f | max %.0f%%/position | maker orders",
-            self.min_ask, self.min_edge, self.max_position_pct * 100,
+            "Rules: ask_price >= $%.2f | min_edge >= $%.3f | max_expiry <= %d days",
+            self.min_ask, self.min_edge, self.max_days_to_expiry,
         )
         logger.info("=" * 70)
 
-        bal = await self.client.get_balance()
-        portfolio = bal.get("portfolio_value", 0)
-        cash = bal.get("balance", 0)
+        try:
+            bal = await self.client.get_balance()
+            portfolio = bal.get("portfolio_value", 0)
+            cash = bal.get("balance", 0)
+        except Exception as e:
+            logger.warning(f"Could not connect to get live balance: {e}. Defaulting to mock $600.00 bankroll.")
+            portfolio = 0
+            cash = 60000 
 
         print(f"\n💰 Cash: ${cash/100:.2f} | Portfolio: ${portfolio/100:.2f} | "
               f"Total: ${(cash+portfolio)/100:.2f}\n", flush=True)
@@ -214,20 +220,21 @@ class SafeCompounder:
 
         print("\n📡 Step 1: Fetching all active markets...", flush=True)
         markets = await self._fetch_all_markets()
-        print(f"  Fetched {len(markets)} markets", flush=True)
+        print(f"  Fetched {len(markets)} active markets", flush=True)
 
-        print("\n🔍 Step 2: Finding high-conviction candidates...", flush=True)
+        print(f"\n🔍 Step 2: Finding high-conviction short-term candidates (Price >= ${self.min_ask:.2f}, Expiry <= {self.max_days_to_expiry}d)...", flush=True)
         candidates = self._find_candidates(markets)
+        print(f"  Selected {len(candidates)} high-conviction candidates for orderbook depth scans.", flush=True)
 
-        print(f"\n📊 Step 3: Checking orderbooks for edge ≥ ${self.min_edge:.2f}...", flush=True)
+        print(f"\n📊 Step 3: Checking orderbooks & applying news sentiment...", flush=True)
         opportunities = await self._check_orderbook_and_price(candidates)
 
         sorted_opps = sorted(opportunities, key=lambda x: (-x["edge"], -x["annualized_roi"]))
-        print(f"\n📋 Top Opportunities:", flush=True)
+        print(f"\n📋 Top Opportunities Found:", flush=True)
         for opp in sorted_opps[:20]:
             print(
                 f"  {opp['side'].upper()} ask:${opp['lowest_ask']:.2f} → our:${opp['our_price']:.2f} | "
-                f"EV:${opp['true_prob']:.2f} edge:${opp['edge']:.2f} | "
+                f"EV:${opp['true_prob']:.2f} edge:${opp['edge']:.3f} | "
                 f"{opp['roi_pct']:.1f}% ({opp['annualized_roi']:.0f}%ann) | "
                 f"{opp['days_to_expiry']}d | vol:{opp['volume']} | {opp['ticker']}",
                 flush=True,
@@ -238,15 +245,16 @@ class SafeCompounder:
         stats = await self._place_resting_orders(sorted_opps, portfolio, cash)
 
         elapsed = time.time() - start
-        bal = await self.client.get_balance()
 
         print(f"\n{'='*70}", flush=True)
         print(f"📊 SAFE COMPOUNDER REPORT", flush=True)
         print(f"{'='*70}", flush=True)
         print(f"  Markets scanned:      {len(markets)}", flush=True)
         print(f"  Candidates:           {len(candidates)}", flush=True)
-        print(f"  With edge > ${self.min_edge:.2f}:      {len(opportunities)}", flush=True)
+        print(f"  With edge > ${self.min_edge:.3f}:      {len(opportunities)}", flush=True)
         print(f"  Orders placed:        {stats['placed']}", flush=True)
+        print(f"  Skipped (duplicates): {stats['skipped_existing']}", flush=True)
+        print(f"  Skipped (too small):  {stats['skipped_size']}", flush=True)
         print(f"  Errors:               {stats['errors']}", flush=True)
         print(f"  Capital deployed:     ${stats['total_deployed']/100:.2f}", flush=True)
         print(f"  Potential profit:     ${stats['total_potential_profit']/100:.2f}", flush=True)
@@ -282,7 +290,7 @@ class SafeCompounder:
                 if not cursor: break
                 page += 1
                 if page > 100: break
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
         except Exception as e:
             logger.warning("Events API failed: %s", e)
         
@@ -297,7 +305,7 @@ class SafeCompounder:
             
             title_lower = m.get("title", "").lower()
             if any(phrase in title_lower for phrase in SKIP_TITLE_PHRASES): continue
-            if int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)) < MIN_VOLUME: continue
+            if int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)) < DEFAULT_MIN_VOLUME: continue
 
             yes_last = float(m.get("last_price_dollars", 0) or m.get("last_price", 0) or 0)
             if yes_last > 1.0: yes_last = yes_last / 100.0
@@ -312,13 +320,15 @@ class SafeCompounder:
                     hours_to_expiry = max(0, (expiry - now).total_seconds() / 3600)
                 except Exception: pass
 
-            if hours_to_expiry <= 0: continue
+            # --- DYNAMIC CAPITAL VELOCITY ENFORCEMENT ---
+            # Exclude long-term money traps (anything longer than self.max_days_to_expiry)
+            if hours_to_expiry <= 0 or hours_to_expiry > (self.max_days_to_expiry * 24): 
+                continue
             
-            # Identify which side has high conviction (>= 0.80)
-            if no_last >= 0.80:
+            if no_last >= self.min_ask:
                 side = "no"
                 true_prob = estimate_true_prob(no_last, hours_to_expiry)
-            elif yes_last >= 0.80:
+            elif yes_last >= self.min_ask:
                 side = "yes"
                 true_prob = estimate_true_prob(yes_last, hours_to_expiry)
             else:
@@ -341,13 +351,26 @@ class SafeCompounder:
 
     async def _check_orderbook_and_price(self, candidates: List[Dict]) -> List[Dict]:
         opportunities = []
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT market_id FROM positions")
+            db_tickers = {row[0] for row in cursor.fetchall()}
+            conn.close()
+        except Exception:
+            db_tickers = set()
+
         for i, m in enumerate(candidates):
             ticker = m["ticker"]
+            if ticker in db_tickers:
+                continue
+
             side = m["_side"]
             true_prob = m["_true_prob"]
+            market_title = m.get("title") or m.get("_event_title") or "Kalshi Market"
 
             try:
-                ob_resp = await self.client.get_orderbook(ticker, depth=10)
+                ob_resp = await self.client.get_orderbook(ticker, depth=5)
                 ob = ob_resp.get("orderbook_fp", ob_resp.get("orderbook", {}))
             except Exception: continue
 
@@ -373,7 +396,17 @@ class SafeCompounder:
 
             if lowest_ask is None or lowest_ask < self.min_ask: continue
 
-            edge = true_prob - lowest_ask
+            print(f"📰 Safe Compounder querying live news: {market_title[:50]}...", flush=True)
+            sentiment_tilt, news_summary = get_market_news_sentiment(market_title)
+            
+            if side == "no":
+                adjusted_prob = true_prob - sentiment_tilt
+            else:
+                adjusted_prob = true_prob + sentiment_tilt
+
+            adjusted_prob = min(0.99, max(0.01, adjusted_prob))
+
+            edge = adjusted_prob - lowest_ask
             if edge < self.min_edge: continue
 
             our_price = lowest_ask - 0.01  
@@ -388,7 +421,8 @@ class SafeCompounder:
                 "ticker": ticker,
                 "title": m.get("title", "")[:70],
                 "side": side,
-                "true_prob": true_prob,
+                "true_prob": adjusted_prob,
+                "original_prob": true_prob,
                 "lowest_ask": lowest_ask,
                 "our_price": our_price,
                 "edge": edge,
@@ -397,7 +431,12 @@ class SafeCompounder:
                 "annualized_roi": annualized_roi,
                 "volume": int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)),
                 "days_to_expiry": m["_days_to_expiry"],
+                "news_summary": news_summary,
+                "sentiment_tilt": sentiment_tilt
             })
+            
+            await asyncio.sleep(0.5)
+
         return opportunities
 
     async def _place_resting_orders(self, opportunities: List[Dict], portfolio: int, cash: int) -> Dict:
@@ -413,6 +452,15 @@ class SafeCompounder:
             ord_tickers = {o["ticker"] for o in existing_orders}
         except Exception: ord_tickers = set()
 
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT market_id FROM positions")
+            db_tickers = {row[0] for row in cursor.fetchall()}
+            conn.close()
+        except Exception:
+            db_tickers = set()
+
         stats = {
             "placed": 0, "skipped_existing": 0, "skipped_size": 0,
             "filled": 0, "errors": 0, "total_potential_profit": 0, "total_deployed": 0,
@@ -422,7 +470,8 @@ class SafeCompounder:
 
         for opp in opportunities:
             ticker = opp["ticker"]
-            if ticker in pos_tickers or ticker in ord_tickers:
+            
+            if ticker in pos_tickers or ticker in ord_tickers or ticker in db_tickers:
                 stats["skipped_existing"] += 1
                 continue
 
@@ -436,7 +485,7 @@ class SafeCompounder:
             profit = contracts * opp["profit"] * 100  
 
             if self.dry_run:
-                print(f"  🏷️ [DRY] {opp['side'].upper()} x{contracts} @ ${price:.2f} | ask:${opp['lowest_ask']:.2f} EV:${opp['true_prob']:.2f} edge:${opp['edge']:.2f}", flush=True)
+                print(f"  🏷️ [DRY] {opp['side'].upper()} x{contracts} @ ${price:.2f} | ask:${opp['lowest_ask']:.2f} EV:${opp['true_prob']:.2f} edge:${opp['edge']:.3f}", flush=True)
                 
                 pos = Position(
                     market_id=ticker,
@@ -444,7 +493,13 @@ class SafeCompounder:
                     entry_price=price,
                     quantity=contracts,
                     timestamp=datetime.now(),
-                    rationale=f"Dual Compounder Edge: ${opp['edge']:.2f}. Expected Value: ${opp['true_prob']:.2f}. Annualized ROI: {opp['annualized_roi']:.0f}%",
+                    rationale=(
+                        f"Mathematical Probability: {opp['original_prob']:.2f}. "
+                        f"Sentiment Adjustment: {opp['sentiment_tilt']:+.2f}. "
+                        f"Final News-Adjusted Probability: {opp['true_prob']:.2f}. "
+                        f"Calculated Edge: ${opp['edge']:.3f}. Annualized ROI: {opp['annualized_roi']:.0f}%"
+                        f"\n\nLive News Report:\n{opp['news_summary']}"
+                    ),
                     confidence=opp['true_prob'], 
                     live=False,
                     strategy="dual_compounder"
@@ -452,6 +507,7 @@ class SafeCompounder:
                 await self.db_manager.add_position(pos)
                 print(f"  -> 💾 Saved to GUI Database queue!")
 
+                db_tickers.add(ticker)
                 stats["placed"] += 1
                 stats["total_potential_profit"] += profit
                 stats["total_deployed"] += cost

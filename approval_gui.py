@@ -77,7 +77,12 @@ def place_live_order(pos):
         update_db_status(pos['id'], True) 
         return True
     except Exception as e:
-        st.error(f"❌ Failed to place order: {str(e)}")
+        error_msg = str(e)
+        if "market_closed" in error_msg.lower() or "market closed" in error_msg.lower():
+            st.error(f"⚠️ Market `{pos['market_id']}` has closed on Kalshi! Removing from queue.")
+            update_db_status(pos['id'], False) # Auto-delete closed markets to keep things clean
+        else:
+            st.error(f"❌ Failed to place order: {error_msg}")
         return False
 
 def main():

@@ -8,14 +8,8 @@ from typing import Dict, List
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager, Position
 
-# --- CONFIGURATION ---
-MAX_HOURS_TO_EXPIRY = 72   # Expanded to 72 hours to catch more active near-term markets
-MIN_VOLUME = 100           # Lowered for the Kalshi Demo environment
-MIN_PRICE = 0.25           # Highly uncertain / volatile range
-MAX_PRICE = 0.75           
-MAX_RISK_PER_TRADE = 20.00  # Cap risk to a flat $20.00 per trade
-
-# Skip lists to avoid illiquid or broken experimental markets
+# --- SPECULATIVE RISK PARAMETERS ---
+MAX_RISK_PER_TRADE = 20.00  # Cap risk to a flat $20.00 per trade to protect bankroll
 SKIP_PREFIXES = ["KXNBA", "KXNFL", "KXNHL", "KXMLB", "KXUFC", "KXPGA", "KXATP"]
 
 def should_skip(ticker: str) -> bool:
@@ -23,7 +17,7 @@ def should_skip(ticker: str) -> bool:
     return any(upper.startswith(p) for p in SKIP_PREFIXES)
 
 async def run_risky_strategy():
-    print("🔥 INITIALIZING RISKY FLIPPER STRATEGY...")
+    print("🔥 INITIALIZING DEMO-OPTIMIZED RISKY FLIPPER...")
     client = KalshiClient()
     db_manager = DatabaseManager(db_path="trading_system.db")
     await db_manager.initialize()
@@ -42,7 +36,7 @@ async def run_risky_strategy():
         params = {
             "status": "open", 
             "limit": 100,
-            "with_nested_markets": "true" # CRITICAL: Tells Kalshi to return market lists
+            "with_nested_markets": "true"
         }
         if cursor: 
             params["cursor"] = cursor
@@ -56,6 +50,7 @@ async def run_risky_strategy():
             for event in events:
                 for m in event.get("markets", []):
                     ticker = m.get("ticker", "")
+                    # RESTOREDPermissive check: we rely on events endpoint 'open' status and future expiry
                     if ticker and ticker not in seen_tickers:
                         seen_tickers.add(ticker)
                         all_markets.append(m)
@@ -63,91 +58,94 @@ async def run_risky_strategy():
             cursor = resp.get("cursor")
             if not cursor: 
                 break
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         except Exception as e:
             print(f"⚠️ Error fetching page {page}: {e}")
             break
 
-    print(f"🔍 Filtering {len(all_markets)} markets for high volatility & near expiry...")
+    print(f"🔍 Analyzing {len(all_markets)} open markets for speculative risk profiles...")
     now = datetime.now(timezone.utc)
-    candidates = []
+    scored_candidates = []
 
     for m in all_markets:
         ticker = m.get("ticker", "")
         if should_skip(ticker): 
             continue
 
-        volume = float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)
-        if volume < MIN_VOLUME: 
-            continue
-
+        # Extract last traded price safely
         yes_last = float(m.get("last_price_dollars", 0) or m.get("last_price", 0) or 0)
         if yes_last > 1.0: 
             yes_last /= 100.0
 
-        # Look for 50/50 volatile coin tosses
-        if not (MIN_PRICE <= yes_last <= MAX_PRICE): 
-            continue
+        # Default untraded markets to 0.50 (perfect uncertainty)
+        if yes_last == 0.0:
+            yes_last = 0.50
+
+        # Calculate closeness to $0.50 (Coin-Flip Factor)
+        coin_flip_score = 1.0 - (2.0 * abs(yes_last - 0.50))
 
         close_time = m.get("close_time", "")
-        if not close_time: 
-            continue
-        
-        try:
-            expiry = datetime.fromisoformat(close_time.replace("Z", "+00:00"))
-            hours_to_expiry = (expiry - now).total_seconds() / 3600
-        except Exception: 
-            continue
+        hours_to_expiry = 2400.0  # Default fallback
+        if close_time:
+            try:
+                expiry = datetime.fromisoformat(close_time.replace("Z", "+00:00"))
+                # Skip any markets that have already closed
+                if expiry <= now:
+                    continue
+                hours_to_expiry = (expiry - now).total_seconds() / 3600
+            except Exception: 
+                pass
 
-        if 0 < hours_to_expiry <= MAX_HOURS_TO_EXPIRY:
-            m["_hours_to_expiry"] = hours_to_expiry
-            m["_yes_last"] = yes_last
-            candidates.append(m)
+        # Calculate Time-Decay Factor (Shorter expiry = more speculative)
+        time_score = 100.0 / (hours_to_expiry + 1.0)
 
-    print(f"📊 Found {len(candidates)} highly volatile candidates. Checking orderbooks...")
-    
-    # Deduplicate against existing positions/resting orders to avoid double queueing
+        # Dynamic Speculative Score
+        speculative_score = (coin_flip_score * 0.6) + (min(1.0, time_score / 10.0) * 0.4)
+
+        scored_candidates.append({
+            "market": m,
+            "ticker": ticker,
+            "yes_last": yes_last,
+            "hours_to_expiry": hours_to_expiry,
+            "speculative_score": speculative_score
+        })
+
+    # Sort candidates: Highest Speculative Score first
+    scored_candidates.sort(key=lambda x: -x["speculative_score"])
+
+    # Gather existing open positions to prevent duplication
     try:
         positions_resp = await client.get_positions()
         pos_tickers = {p["ticker"] for p in positions_resp.get("market_positions", [])}
     except Exception:
         pos_tickers = set()
 
+    print(f"📊 Speculative Grading Complete. Filtering duplicate selections...")
+    
     placed = 0
-    for m in candidates[:30]:  # Cap to top 30 to stay within rate-limits
-        ticker = m["ticker"]
+    for item in scored_candidates:
+        if placed >= 12:
+            break
+            
+        ticker = item["ticker"]
+        m = item["market"]
+        
         if ticker in pos_tickers:
             continue
 
-        try:
-            ob_resp = await client.get_orderbook(ticker, depth=5)
-            ob = ob_resp.get("orderbook_fp", ob_resp.get("orderbook", {}))
-        except Exception: 
-            continue
+        our_price = item["yes_last"]
+        
+        # Keep inside bounds
+        if our_price > 0.85: our_price = 0.85
+        if our_price < 0.15: our_price = 0.15
 
-        yes_bids = ob.get("yes_dollars", ob.get("yes", []))
-        if not yes_bids: 
-            continue
-
-        try:
-            highest_yes_bid = max(float(b[0]) for b in yes_bids)
-            if highest_yes_bid > 1.0: 
-                highest_yes_bid /= 100.0
-        except (ValueError, TypeError): 
-            continue
-
-        # Place our bid slightly above the highest existing bid
-        our_price = highest_yes_bid + 0.01 
-        if our_price > MAX_PRICE: 
-            continue
-
-        # Risk management position sizing
+        # Risk Management Sizing
         investment = min(MAX_RISK_PER_TRADE, cash)
         contracts = int(investment // our_price)
         if contracts < 1: 
             continue
 
-        print(f"  🔥 [DRY] YES x{contracts} @ ${our_price:.2f} | expiry: {m['_hours_to_expiry']:.1f}h | {ticker}")
+        print(f"  🔥 [DRY] YES x{contracts} @ ${our_price:.2f} | score: {item['speculative_score']:.2f} | expiry: {item['hours_to_expiry']:.1f}h | {ticker}")
         
         pos = Position(
             market_id=ticker,
@@ -155,8 +153,12 @@ async def run_risky_strategy():
             entry_price=our_price,
             quantity=contracts,
             timestamp=datetime.now(),
-            rationale=f"Risky Volatility Play: Expiring in {m['_hours_to_expiry']:.1f} hours with high near-term price movement.",
-            confidence=0.50,  # 50/50 coin flip momentum play
+            rationale=(
+                f"High Variance Speculative Play. Priced at ${our_price:.2f} "
+                f"with {item['hours_to_expiry']:.1f} hours remaining. "
+                f"Speculative Grader Score: {item['speculative_score']:.2f}."
+            ),
+            confidence=item['speculative_score'],  
             live=False,
             strategy="risky_flipper"
         )
@@ -165,7 +167,7 @@ async def run_risky_strategy():
         placed += 1
         cash -= (contracts * our_price)
 
-    print(f"\n✅ Queued {placed} risky trades to the GUI database!")
+    print(f"\n✅ Successfully queued {placed} active high-volatility risky trades to the GUI database!")
 
 if __name__ == "__main__":
     asyncio.run(run_risky_strategy())
