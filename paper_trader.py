@@ -80,27 +80,34 @@ async def scan_and_log():
     # 2. Run decision on each market
     for market in markets:
         try:
-            market_id = market.get("ticker") or market.get("market_id", "")
-            title = market.get("title", market_id)
+            # Safely extract properties whether it is a dict or an object
+            if isinstance(market, dict):
+                market_id = market.get("ticker") or market.get("market_id", "")
+                title = market.get("title", market_id)
+                no_ask = market.get("no_ask", 0)
+            else:
+                market_id = getattr(market, "ticker", None) or getattr(market, "market_id", "")
+                title = getattr(market, "title", market_id)
+                no_ask = getattr(market, "no_ask", 0)
 
+            # CORRECTED: Calling decide.py with exact matching parameters
             decision = await make_decision_for_market(
-                market_data=market,
+                market=market,
                 kalshi_client=kalshi,
                 xai_client=xai,
                 db_manager=db,
             )
 
+            # If decide.py returns None, it decided to skip the trade
             if decision is None:
                 continue
 
-            action = decision.get("action", "skip")
-            if action in ("skip", "hold", None):
-                continue
-
-            side = decision.get("side", "NO")
-            confidence = decision.get("confidence", 0)
-            limit_price = decision.get("limit_price", market.get("no_ask", 0))
-            reasoning = decision.get("reasoning", "")
+            # CORRECTED: decide.py returns a Position object, so we extract using getattr
+            side = getattr(decision, "side", "NO")
+            confidence = getattr(decision, "confidence", 0.0)
+            limit_price = getattr(decision, "entry_price", no_ask)
+            reasoning = getattr(decision, "rationale", "No reasoning provided.")
+            strategy = getattr(decision, "strategy", "directional")
 
             # Only log signals with meaningful confidence edge
             if confidence < 0.55:
@@ -113,7 +120,7 @@ async def scan_and_log():
                 entry_price=limit_price,
                 confidence=confidence,
                 reasoning=reasoning,
-                strategy=decision.get("strategy", "directional"),
+                strategy=strategy,
             )
             signals_logged += 1
             logger.info(
@@ -122,7 +129,7 @@ async def scan_and_log():
             )
 
         except Exception as e:
-            logger.warning(f"Decision failed for market: {e}")
+            logger.warning(f"Decision failed for market {getattr(market, 'ticker', 'unknown')}: {e}")
             continue
 
     logger.info(f"✅ Logged {signals_logged} paper signals")
@@ -151,14 +158,19 @@ async def check_settlements():
             if not market:
                 continue
 
-            status = market.get("status", "")
-            result = market.get("result", "")
+            # Safely extract properties whether it is a dict or an object
+            if isinstance(market, dict):
+                status = market.get("status", "")
+                result = market.get("result", "")
+            else:
+                status = getattr(market, "status", "")
+                result = getattr(market, "result", "")
 
             if status not in ("settled", "finalized", "closed"):
                 continue
 
             # result is typically "yes" or "no"
-            settlement_price = 1.0 if result.lower() == "yes" else 0.0
+            settlement_price = 1.0 if str(result).lower() == "yes" else 0.0
 
             settle_signal(sig["id"], settlement_price)
             outcome = "WIN" if (

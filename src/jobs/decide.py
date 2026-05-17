@@ -1,3 +1,4 @@
+
 """
 Trading decision job - analyzes markets and generates trading decisions.
 
@@ -78,14 +79,14 @@ async def make_decision_for_market(
     logger.info(f"Analyzing market: {market.title} ({market.market_id})")
 
     try:
-        # CHECK 1: Daily budget enforcement
-        daily_cost = await db_manager.get_daily_ai_cost()
-        if daily_cost >= settings.trading.daily_ai_budget:
-            logger.warning(
-                f"Daily AI budget of ${settings.trading.daily_ai_budget} exceeded. "
-                f"Current cost: ${daily_cost:.3f}. Skipping analysis."
-            )
-            return None
+        # # CHECK 1: Daily budget enforcement
+        # daily_cost = await db_manager.get_daily_ai_cost()
+        # if daily_cost >= settings.trading.daily_ai_budget:
+        #     logger.warning(
+        #         f"Daily AI budget of ${settings.trading.daily_ai_budget} exceeded. "
+        #         f"Current cost: ${daily_cost:.3f}. Skipping analysis."
+        #     )
+        #     return None
 
         # CHECK 2: Recent analysis deduplication
         if await db_manager.was_recently_analyzed(
@@ -112,9 +113,12 @@ async def make_decision_for_market(
             return None
 
         # Get real-time portfolio balance
-        balance_response = await kalshi_client.get_balance()
-        available_balance = balance_response.get("balance", 0) / 100  # Convert cents to dollars
-        portfolio_data = {"available_balance": available_balance}
+        # balance_response = await kalshi_client.get_balance()
+        # available_balance = balance_response.get("balance", 0) / 100  
+        # portfolio_data = {"available_balance": available_balance}
+
+        available_balance = 500.0
+        portfolio_data = {"available_balance": 500.0}
         
         logger.info(f"Current available balance: ${available_balance:.2f}")
 
@@ -213,8 +217,7 @@ async def make_decision_for_market(
         }
 
         # COST OPTIMIZATION: Skip expensive news search for low-volume markets
-        if (settings.trading.skip_news_for_low_volume and
-            market.volume < settings.trading.news_search_volume_threshold):
+        if (True and market.volume < 100.0):
             logger.info(f"Skipping news search for low volume market {market.market_id} (volume: {market.volume})")
             news_summary = f"Low volume market ({market.volume}). Analysis based on market data only."
             estimated_search_cost = 0.0

@@ -51,7 +51,7 @@ class KalshiClient(TradingLoggerMixin):
             backoff_factor: Factor for exponential backoff
         """
         self.api_key = api_key or settings.api.kalshi_api_key
-        self.base_url = settings.api.kalshi_base_url
+        self.base_url = "https://demo-api.kalshi.co"
         self.private_key_path = private_key_path or os.environ.get("KALSHI_PRIVATE_KEY_PATH", "kalshi_private_key.pem")
         self.private_key = None
         self.max_retries = max_retries

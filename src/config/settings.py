@@ -31,7 +31,7 @@ class EnsembleConfig:
     enabled: bool = True
     # Model roster for ensemble decisions — all via OpenRouter (April 2026)
     models: Dict[str, Dict] = field(default_factory=lambda: {
-        "anthropic/claude-sonnet-4.5": {"provider": "openrouter", "role": "lead_analyst", "weight": 0.30},
+        "google/gemini-2.0-flash-exp:free": {"provider": "openrouter", "role": "lead_analyst", "weight": 0.30},
         "google/gemini-3.1-pro": {"provider": "openrouter", "role": "forecaster", "weight": 0.30},
         "openai/gpt-5.4": {"provider": "openrouter", "role": "risk_manager", "weight": 0.20},
         "deepseek/deepseek-v3.2": {"provider": "openrouter", "role": "bull_researcher", "weight": 0.10},
@@ -55,7 +55,7 @@ class SentimentConfig:
         "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
         "https://feeds.bbci.co.uk/news/business/rss.xml",
     ])
-    sentiment_model: str = "google/gemini-3.1-flash-lite-preview"  # Fast/cheap for sentiment ($0.25/M)
+    sentiment_model: str = "openrouter/free"  # Fast/cheap for sentiment ($0.25/M)
     cache_ttl_minutes: int = 30
     max_articles_per_source: int = 10
     relevance_threshold: float = 0.3
@@ -95,8 +95,8 @@ class TradingConfig:
     scan_interval_seconds: int = 60      # SANE: 60-second scan interval (was 30)
     
     # AI model configuration
-    primary_model: str = "anthropic/claude-sonnet-4.5"  # Primary model via OpenRouter
-    fallback_model: str = "deepseek/deepseek-v3.2"  # Fallback model via OpenRouter
+    primary_model: str = "openrouter/free"  # Primary model via OpenRouter
+    fallback_model: str = "openrouter/free"  # Fallback model via OpenRouter
     ai_temperature: float = 0  # Lower temperature for more consistent JSON output
     ai_max_tokens: int = 8000    # Reasonable limit for reasoning models (grok-4 works better with 8000)
     
@@ -135,7 +135,7 @@ class TradingConfig:
     min_confidence_threshold: float = 0.45  # DECREASED: Lower confidence threshold (was 0.55, now 0.45)
 
     # Cost control and market analysis frequency - MORE PERMISSIVE
-    daily_ai_budget: float = 10.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
+    daily_ai_budget: float = 20.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
     max_ai_cost_per_decision: float = 0.08  # INCREASED: Higher per-decision cost (was 0.05, now 0.08)
     analysis_cooldown_hours: int = 3  # DECREASED: Shorter cooldown (was 6, now 3)
     max_analyses_per_market_per_day: int = 4  # INCREASED: More analyses per day (was 2, now 4)
