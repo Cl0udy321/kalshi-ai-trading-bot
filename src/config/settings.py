@@ -48,7 +48,7 @@ class EnsembleConfig:
 @dataclass
 class SentimentConfig:
     """News and sentiment analysis configuration."""
-    enabled: bool = True
+    enabled: bool = False
     rss_feeds: List[str] = field(default_factory=lambda: [
         "https://feeds.reuters.com/reuters/topNews",
         "https://feeds.reuters.com/reuters/businessNews",
@@ -245,7 +245,7 @@ performance_monitoring: bool = True     # Enable performance monitoring
 # Cutting-edge features for maximum performance
 cross_market_arbitrage: bool = False    # Enable when arbitrage module ready
 multi_model_ensemble: bool = False      # Not wired into the live trading path. The scaffolding lives in src/agents/ — fork it if you want real parallel multi-model voting.
-sentiment_analysis: bool = True         # News sentiment analysis (ENABLED)
+sentiment_analysis: bool = False         # News sentiment analysis (ENABLED)
 websocket_streaming: bool = True        # WebSocket real-time data (ENABLED)
 options_strategies: bool = False        # Complex options strategies (future)
 algorithmic_execution: bool = False     # Smart order execution (future)
