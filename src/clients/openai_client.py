@@ -1,6 +1,6 @@
 """
-OpenRouter client for AI-powered trading decisions.
-Interfaces with Grok models through OpenRouter for market analysis and trading strategies.
+Groq client for AI-powered trading decisions.
+Interfaces with Grok models through Groq for market analysis and trading strategies.
 """
 
 import asyncio
@@ -345,7 +345,7 @@ class OpenAIClient(TradingLoggerMixin):
                 "max_tokens": max_tokens,
                 "attempts": max_retries + 1
             },
-            "openrouter_completion_all_retries_failed"
+            "groq_completion_all_retries_failed"
         )
         raise last_exception
 

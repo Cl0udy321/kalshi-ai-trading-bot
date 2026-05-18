@@ -1,7 +1,6 @@
 """
-OpenRouter client for multi-model AI-powered trading decisions.
-Routes requests through OpenRouter's unified API to access Claude, GPT-4o,
-Gemini, DeepSeek, and other frontier models for market analysis.
+Groq client for multi-model AI-powered trading decisions.
+Routes requests through Groq's API to access fast models like Llama 3 for market analysis.
 """
 
 import asyncio
@@ -27,38 +26,30 @@ from src.utils.logging_setup import TradingLoggerMixin, log_error_with_context
 # ---------------------------------------------------------------------------
 
 MODEL_PRICING: Dict[str, Dict[str, float]] = {
-    "anthropic/claude-sonnet-4": {
-        "input_per_1k": 0.003,
-        "output_per_1k": 0.015,
+    "llama-3.1-70b-versatile": {
+        "input_per_1k": 0.00059,
+        "output_per_1k": 0.00079,
     },
-    "openai/o3": {
-        "input_per_1k": 0.002,
-        "output_per_1k": 0.008,
+    "llama-3.1-8b-instant": {
+        "input_per_1k": 0.00005,
+        "output_per_1k": 0.00008,
     },
-    "openai/gpt-4.1": {
-        "input_per_1k": 0.002,
-        "output_per_1k": 0.008,
+    "mixtral-8x7b-32768": {
+        "input_per_1k": 0.00024,
+        "output_per_1k": 0.00024,
     },
-    "google/gemini-2.5-pro-preview": {
-        "input_per_1k": 0.00125,
-        "output_per_1k": 0.01,
-    },
-    "google/gemini-2.5-flash-preview": {
-        "input_per_1k": 0.00015,
-        "output_per_1k": 0.0006,
-    },
-    "deepseek/deepseek-r1": {
-        "input_per_1k": 0.0008,
-        "output_per_1k": 0.002,
+    "gemma2-9b-it": {
+        "input_per_1k": 0.00020,
+        "output_per_1k": 0.00020,
     },
 }
 
 # Ordered fallback chain -- if the requested model fails, try the next one.
 DEFAULT_FALLBACK_ORDER: List[str] = [
-    "anthropic/claude-sonnet-4",
-    "openai/gpt-4.1",
-    "google/gemini-2.5-pro-preview",
-    "deepseek/deepseek-r1",
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 ]
 
 
@@ -79,12 +70,12 @@ class ModelCostTracker:
 
 
 # ---------------------------------------------------------------------------
-# OpenRouterClient
+# GroqClient
 # ---------------------------------------------------------------------------
 
-class OpenRouterClient(TradingLoggerMixin):
+class GroqClient(TradingLoggerMixin):
     """
-    Async client that accesses multiple frontier models through OpenRouter.
+    Async client that accesses multiple frontier models through Groq.
 
     Provides the same interface as XAIClient (``get_completion`` and
     ``get_trading_decision``) so callers can swap providers transparently.
@@ -106,15 +97,15 @@ class OpenRouterClient(TradingLoggerMixin):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        default_model: str = "anthropic/claude-sonnet-4",
+        default_model: str = "llama-3.1-70b-versatile",
         db_manager: Any = None,
     ):
-        self.api_key = api_key or settings.api.openrouter_api_key
-        self.base_url = settings.api.openrouter_base_url
+        self.api_key = api_key or settings.api.groq_api_key
+        self.base_url = settings.api.groq_base_url
         self.default_model = default_model
         self.db_manager = db_manager
 
-        # OpenAI-compatible async client pointed at OpenRouter
+        # OpenAI-compatible async client pointed at Groq
         self.client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -136,11 +127,11 @@ class OpenRouterClient(TradingLoggerMixin):
         self.request_count: int = 0
 
         # Daily usage tracker (same pattern as XAIClient)
-        self.usage_file = "logs/daily_openrouter_usage.pkl"
+        self.usage_file = "logs/daily_groq_usage.pkl"
         self.daily_tracker: DailyUsageTracker = self._load_daily_tracker()
 
         self.logger.info(
-            "OpenRouter client initialized",
+            "Groq client initialized",
             default_model=self.default_model,
             available_models=list(MODEL_PRICING.keys()),
             daily_limit=self.daily_tracker.daily_limit,
@@ -200,7 +191,7 @@ class OpenRouterClient(TradingLoggerMixin):
             self.daily_tracker.last_exhausted_time = datetime.now()
             self._save_daily_tracker()
             self.logger.warning(
-                "Daily OpenRouter cost limit reached",
+                "Daily Groq cost limit reached",
                 daily_cost=self.daily_tracker.total_cost,
                 daily_limit=self.daily_tracker.daily_limit,
                 requests_today=self.daily_tracker.request_count,
@@ -220,13 +211,13 @@ class OpenRouterClient(TradingLoggerMixin):
                 )
                 self._save_daily_tracker()
                 self.logger.info(
-                    "New day -- OpenRouter daily limits reset",
+                    "New day -- Groq daily limits reset",
                     daily_limit=self.daily_tracker.daily_limit,
                 )
                 return True
 
             self.logger.info(
-                "OpenRouter daily limit reached -- request skipped",
+                "Groq daily limit reached -- request skipped",
                 daily_cost=self.daily_tracker.total_cost,
                 daily_limit=self.daily_tracker.daily_limit,
             )
@@ -373,7 +364,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 cost = self._calculate_cost(model, input_tokens, output_tokens)
 
                 self.logger.debug(
-                    "OpenRouter completion succeeded",
+                    "Groq completion succeeded",
                     model=model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -395,7 +386,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 is_retryable = self._is_retryable_error(exc)
 
                 self.logger.warning(
-                    "OpenRouter request failed",
+                    "Groq request failed",
                     model=model,
                     attempt=attempt + 1,
                     max_retries=self.MAX_RETRIES_PER_MODEL,
@@ -430,7 +421,7 @@ class OpenRouterClient(TradingLoggerMixin):
         market_id: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Get a completion from the best available OpenRouter model.
+        Get a completion from the best available Groq model.
 
         Falls back through the model chain if the requested model fails.
         Returns None if daily limits are exceeded or all models fail.
@@ -478,7 +469,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 continue
 
         self.logger.error(
-            "All OpenRouter models failed for get_completion",
+            "All Groq models failed for get_completion",
             models_tried=fallback_chain,
         )
         return None
@@ -495,7 +486,7 @@ class OpenRouterClient(TradingLoggerMixin):
         model: Optional[str] = None,
     ) -> Optional[TradingDecision]:
         """
-        Obtain a structured trading decision from an OpenRouter model.
+        Obtain a structured trading decision from an Groq model.
 
         The method builds a prompt, queries the model (with fallback), and
         parses the JSON response into a ``TradingDecision`` object.
@@ -527,7 +518,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 if decision is not None:
                     # Log the successful query
                     await self._log_query(
-                        strategy="openrouter",
+                        strategy="groq",
                         query_type="trading_decision",
                         prompt=prompt,
                         response=content,
@@ -553,7 +544,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 continue
 
         self.logger.error(
-            "All OpenRouter models failed for get_trading_decision",
+            "All Groq models failed for get_trading_decision",
             models_tried=fallback_chain,
         )
         return None
@@ -757,7 +748,7 @@ If you do not recommend trading, use action "SKIP":
         except Exception:
             pass
         self.logger.info(
-            "OpenRouter client closed",
+            "Groq client closed",
             total_cost=round(self.total_cost, 6),
             total_requests=self.request_count,
         )

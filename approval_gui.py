@@ -4,6 +4,7 @@ import pandas as pd
 import asyncio
 import threading
 import uuid
+from datetime import datetime, timezone
 
 from src.clients.kalshi_client import KalshiClient
 
@@ -56,6 +57,38 @@ def run_coroutine_in_thread(coro):
     if exception: raise exception
     return result
 
+@st.cache_data(ttl=300)
+def fetch_markets_data(tickers: list):
+    if not tickers: return {}, {}
+    async def fetch():
+        kalshi = KalshiClient()
+        market_resp = await kalshi.get_markets(tickers=tickers, limit=100)
+        markets = market_resp.get("markets", [])
+        market_map = {m.get("ticker"): m for m in markets}
+        # Fetch event slugs for URL building
+        event_tickers = list({m.get("event_ticker") for m in markets if m.get("event_ticker")})
+        event_map = {}
+        for et in event_tickers:
+            try:
+                ev_resp = await kalshi.get_event(et)
+                ev = ev_resp.get("event", {})
+                # Derive URL slug from event title (e.g. "When will X happen?" -> "when-will-x-happen")
+                import re
+                raw_title = ev.get("title", "")
+                slug = re.sub(r'[^a-z0-9]+', '-', raw_title.lower()).strip('-')
+                event_map[et] = {
+                    "slug": slug,
+                    "series_ticker": ev.get("series_ticker", ""),
+                }
+            except Exception:
+                event_map[et] = {"slug": "", "series_ticker": ""}
+        return market_map, event_map
+    try:
+        market_map, event_map = run_coroutine_in_thread(fetch())
+        return market_map, event_map
+    except Exception:
+        return {}, {}
+
 async def execute_async_trade(pos):
     kalshi = KalshiClient()
     price_cents = int(float(pos['entry_price']) * 100)
@@ -93,6 +126,10 @@ def main():
         st.info("No pending trades in the queue. Run `cli.py` or `run_risky.py` to find opportunities.")
         return
 
+    # Fetch live market data for all tickers
+    tickers = [p['market_id'] for p in positions]
+    market_data_map, event_data_map = fetch_markets_data(tickers)
+
     col1, col2, col3 = st.columns(3)
     col1.metric("Pending Trades", len(positions))
     col2.metric("Environment", "DEMO API")
@@ -100,6 +137,20 @@ def main():
     st.divider()
 
     for pos in positions:
+        market_info = market_data_map.get(pos['market_id'], {})
+        
+        # Auto-expiry check: Silently delete expired/closed trades from DB and skip rendering
+        close_time_str = market_info.get('close_time')
+        if close_time_str:
+            try:
+                expiry = datetime.fromisoformat(close_time_str.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                if (expiry - now).total_seconds() < 0:
+                    update_db_status(pos['id'], False)
+                    continue
+            except Exception:
+                pass
+
         with st.container():
             is_risky = 'risky' in str(pos['strategy']).lower()
             
@@ -109,22 +160,112 @@ def main():
             else:
                 st.info("🛡️ **SAFE COMPENSATED EDGE** — *High probability edge compounding.*")
                 
-            st.subheader(f"🏷️ {pos['market_id']}")
+            title = market_info.get('title', pos['market_id'])
             
-            info_col, reason_col, action_col = st.columns([1.5, 2.5, 1])
+            time_left = "Unknown Expiry"
+            if close_time_str:
+                try:
+                    expiry = datetime.fromisoformat(close_time_str.replace("Z", "+00:00"))
+                    now = datetime.now(timezone.utc)
+                    delta = expiry - now
+                    if delta.total_seconds() < 0:
+                        time_left = "Market Closed"
+                    else:
+                        days = delta.days
+                        seconds = delta.seconds
+                        hours = seconds // 3600
+                        minutes = (seconds % 3600) // 60
+                        if days > 0:
+                            time_left = f"{days}d {hours}h left"
+                        else:
+                            time_left = f"{hours}h {minutes}m left"
+                except Exception:
+                    pass
+
+            st.subheader(f"🏷️ {title}")
+            event_ticker = market_info.get('event_ticker', pos['market_id'])
+            event_info = event_data_map.get(event_ticker, {})
+            slug = event_info.get('slug', '')
+            series_ticker = event_info.get('series_ticker', '')
+            et_lower = event_ticker.lower()
+            # Build correct 3-part Kalshi URL: /markets/{series}/{slug}/{event_ticker}
+            if slug and series_ticker:
+                kalshi_url = f"https://kalshi.com/markets/{series_ticker.lower()}/{slug}/{et_lower}"
+            elif slug:
+                kalshi_url = f"https://kalshi.com/markets/{slug}/{et_lower}"
+            else:
+                kalshi_url = f"https://kalshi.com/markets/{et_lower}"
+            # Extract live ask price based on contract side
+            live_price = 0.0
+            if market_info:
+                if pos['side'].lower() == "yes":
+                    live_price = float(market_info.get("yes_ask_dollars", 0) or (market_info.get("yes_ask", 0) / 100))
+                else:
+                    live_price = float(market_info.get("no_ask_dollars", 0) or (market_info.get("no_ask", 0) / 100))
+            
+            target_entry = float(pos['entry_price'])
+            if live_price == 0.0:
+                live_price = target_entry
+                
+            price_diff = live_price - target_entry
+            
+            # Reclassify edge status based on price shift
+            if price_diff <= -0.02:
+                edge_status = "🟢 EDGE BOOSTED (Contract is cheaper than analyzed!)"
+                edge_color = "green"
+            elif price_diff >= 0.02:
+                edge_status = "🔴 EDGE REDUCED (Contract is more expensive)"
+                edge_color = "red"
+            else:
+                edge_status = "🔵 ACTIVE EDGE (Live price matches original)"
+                edge_color = "blue"
+
+            # Dynamic contract auto-scaling logic based on price drift
+            base_qty = int(pos['quantity'])
+            auto_scaled_qty = base_qty
+            
+            if target_entry > 0 and live_price > 0:
+                multiplier = target_entry / live_price
+                if price_diff >= 0.05:
+                    # Odds reduced -> scale down aggressively
+                    multiplier = max(0.10, multiplier * 0.7)
+                elif price_diff <= -0.05:
+                    # Odds boosted -> scale up to lock in the edge
+                    multiplier = min(2.0, multiplier * 1.3)
+                auto_scaled_qty = max(1, int(round(base_qty * multiplier)))
+
+            # Calculate execution stats statically (No interactive inputs)
+            execution_price = live_price
+            execution_qty = auto_scaled_qty
+            
+            cost = execution_qty * execution_price
+            profit = (execution_qty * 1.00) - cost
+            roi = (profit / cost) * 100 if cost > 0 else 0
+
+            st.caption(f"**Ticker:** `{pos['market_id']}` | **Time till payout:** ⏳ `{time_left}` | [**🔗 View on Kalshi**]({kalshi_url})")
+            st.markdown(f"**Live Odds Grading:** :{edge_color}[**{edge_status}**]")
+            
+            info_col, reason_col, action_col = st.columns([1.6, 2.4, 1])
             
             with info_col:
-                st.markdown(f"**Contract Side:** :{'red' if is_risky else 'blue'}[**{pos['side']}**]")
+                st.markdown(f"**Side:** :{'red' if is_risky else 'blue'}[**{pos['side'].upper()}**]")
                 
-                qty = int(pos['quantity'])
-                entry = float(pos['entry_price'])
-                cost = qty * entry
-                profit = (qty * 1.00) - cost
-                roi = (profit / cost) * 100 if cost > 0 else 0
+                st.metric("Execution Price", f"${execution_price:.2f}")
+                st.metric("Contracts", f"{execution_qty}")
                 
-                st.metric("Target Entry", f"${entry:.2f}")
-                st.metric("Quantity", f"{qty}", help=f"Total Cost: ${cost:.2f}")
-                st.metric("Expected Profit", f"${profit:.2f}", f"+{roi:.1f}% ROI")
+                # Help tips explaining auto-scaling
+                if auto_scaled_qty > base_qty:
+                    scale_tip = f"🤖 **Auto-scaled:** +{auto_scaled_qty - base_qty} contracts added"
+                elif auto_scaled_qty < base_qty:
+                    scale_tip = f"🤖 **Auto-scaled:** -{base_qty - auto_scaled_qty} contracts reduced"
+                else:
+                    scale_tip = "🤖 **Auto-scaled:** Size optimal"
+                
+                st.caption(scale_tip)
+                st.caption(f"Original Target: ${target_entry:.2f}")
+                st.markdown(f"**Total Cost:** `${cost:.2f}`")
+                st.markdown(f"**Expected Profit:** :green[`${profit:.2f}`]")
+                st.markdown(f"**ROI:** `+{roi:.1f}%`")
 
             with reason_col:
                 st.markdown("### 🧠 Logic")
@@ -138,6 +279,9 @@ def main():
                 st.write("\n\n")
                 if st.button("✅ Approve", key=f"app_{pos['id']}", use_container_width=True):
                     with st.spinner("Routing..."):
+                        # Override database properties with the model's dynamic choices before placing order
+                        pos['entry_price'] = execution_price
+                        pos['quantity'] = execution_qty
                         if place_live_order(pos): st.rerun()
 
                 if st.button("❌ Deny", type="primary", key=f"den_{pos['id']}", use_container_width=True):

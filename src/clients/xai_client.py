@@ -1,15 +1,15 @@
 """
-xai_client.py — historical name; this is now the OpenRouter client wrapper.
+xai_client.py — historical name; this is now the Groq client wrapper.
 
 The direct xAI dependency was removed when the project moved to a single
-OpenRouter API key. The class kept the ``XAIClient`` name for compatibility,
-but every call routes through src/clients/openrouter_client.py.
+Groq API key. The class kept the ``XAIClient`` name for compatibility,
+but every call routes through src/clients/groq_client.py.
 
 This file holds:
  1. The ``TradingDecision`` and ``DailyUsageTracker`` dataclasses, used
     across the codebase.
  2. The ``XAIClient`` wrapper, which adds a persistent daily-cost tracker
-    on top of the OpenRouter client.
+    on top of the Groq client.
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from src.utils.logging_setup import TradingLoggerMixin
 
 
 # ---------------------------------------------------------------------------
-# Shared dataclasses (imported by openrouter_client, agents, etc.)
+# Shared dataclasses (imported by groq_client, agents, etc.)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -50,14 +50,14 @@ class DailyUsageTracker:
 
 
 # ---------------------------------------------------------------------------
-# XAIClient — cost-tracking wrapper (delegates completions to OpenRouter)
+# XAIClient — cost-tracking wrapper (delegates completions to Groq)
 # ---------------------------------------------------------------------------
 
 class XAIClient(TradingLoggerMixin):
     """
     Compatibility shim that replaces the old xAI SDK client.
 
-    All completions are forwarded to OpenRouter.  The daily-cost-tracking
+    All completions are forwarded to Groq.  The daily-cost-tracking
     interface (daily_tracker, _check_daily_limits, _update_daily_cost) is
     preserved so that existing callers (beast_mode_bot) continue to work
     without modification.
@@ -81,11 +81,11 @@ class XAIClient(TradingLoggerMixin):
         self.usage_file = "logs/daily_ai_usage.pkl"
         self.daily_tracker = self._load_daily_tracker()
 
-        # Lazy OpenRouter client (initialised on first LLM call)
-        self._openrouter_client = None
+        # Lazy Groq client (initialised on first LLM call)
+        self._groq_client = None
 
         self.logger.info(
-            "XAIClient (OpenRouter delegate) initialized",
+            "XAIClient (Groq delegate) initialized",
             primary_model=self.primary_model,
             daily_limit=self.daily_tracker.daily_limit,
             today_cost=self.daily_tracker.total_cost,
@@ -172,19 +172,19 @@ class XAIClient(TradingLoggerMixin):
         return True
 
     # ------------------------------------------------------------------
-    # OpenRouter delegation
+    # Groq delegation
     # ------------------------------------------------------------------
 
-    def _get_openrouter_client(self):
-        """Lazy-init OpenRouter client."""
-        if self._openrouter_client is None:
+    def _get_groq_client(self):
+        """Lazy-init Groq client."""
+        if self._groq_client is None:
             try:
-                from src.clients.openrouter_client import OpenRouterClient
-                self._openrouter_client = OpenRouterClient(db_manager=self.db_manager)
-                self.logger.info("OpenRouter client initialised (via XAIClient shim)")
+                from src.clients.groq_client import GroqClient
+                self._groq_client = GroqClient(db_manager=self.db_manager)
+                self.logger.info("Groq client initialised (via XAIClient shim)")
             except Exception as e:
-                self.logger.error(f"Failed to init OpenRouter client: {e}")
-        return self._openrouter_client
+                self.logger.error(f"Failed to init Groq client: {e}")
+        return self._groq_client
 
     async def get_completion(
         self,
@@ -196,14 +196,14 @@ class XAIClient(TradingLoggerMixin):
         market_id: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Get a completion via OpenRouter.  Delegates to OpenRouterClient and
+        Get a completion via Groq.  Delegates to GroqClient and
         updates the local daily cost tracker so that beast_mode_bot's limit
         checks stay accurate.
         """
         if not await self._check_daily_limits():
             return None
 
-        client = self._get_openrouter_client()
+        client = self._get_groq_client()
         if client is None:
             return None
 
@@ -237,11 +237,11 @@ class XAIClient(TradingLoggerMixin):
         portfolio_data: Dict,
         news_summary: str = "",
     ) -> Optional[TradingDecision]:
-        """Get a trading decision via OpenRouter."""
+        """Get a trading decision via Groq."""
         if not await self._check_daily_limits():
             return None
 
-        client = self._get_openrouter_client()
+        client = self._get_groq_client()
         if client is None:
             return None
 
@@ -276,8 +276,8 @@ class XAIClient(TradingLoggerMixin):
 
     async def close(self) -> None:
         """Clean up resources."""
-        if self._openrouter_client:
-            await self._openrouter_client.close()
+        if self._groq_client:
+            await self._groq_client.close()
         self.logger.info(
             "XAIClient closed",
             total_estimated_cost=self.total_cost,

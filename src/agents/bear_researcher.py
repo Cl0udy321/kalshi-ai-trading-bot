@@ -1,7 +1,7 @@
 """
 Bear Researcher Agent -- makes the strongest possible case for NO.
 
-Uses Gemini (via OpenRouter) by default.  Focuses on:
+Uses Gemini (via Groq) by default.  Focuses on:
 - Arguments AGAINST the event happening
 - Risk factors and counterarguments
 - Probability ceiling estimate (upper bound for YES probability)

@@ -1,7 +1,7 @@
 """
 News Analyst Agent -- analyses news sentiment and relevance to a market.
 
-Uses Claude Sonnet 4 (via OpenRouter) by default.  Focuses on:
+Uses Claude Sonnet 4 (via Groq) by default.  Focuses on:
 - News impact assessment
 - Sentiment scoring (-1 to 1)
 - Relevance to specific market

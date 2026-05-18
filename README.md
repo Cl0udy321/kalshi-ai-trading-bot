@@ -10,7 +10,7 @@
 
 **A toolkit for building automated trading strategies on [Kalshi](https://kalshi.com) prediction markets.**
 
-Signed Kalshi API client, market-data ingestion, position tracking, SQLite telemetry, a Streamlit dashboard, and a pluggable LLM client (any model on OpenRouter). Three example strategies ship with the repo as starting points — fork them, replace them, or write your own from scratch.
+Signed Kalshi API client, market-data ingestion, position tracking, SQLite telemetry, a Streamlit dashboard, and a pluggable LLM client (any model on Groq). Three example strategies ship with the repo as starting points — fork them, replace them, or write your own from scratch.
 
 [Quick Start](#quick-start) · [What's Included](#whats-included) · [Example Strategies](#example-strategies) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md) · [Kalshi API Docs](https://trading-api.readme.io/reference/getting-started)
 
@@ -32,7 +32,7 @@ python setup.py        # creates .venv, installs deps
 
 # 2. Add your API keys
 cp env.template .env
-# then open .env and fill in KALSHI_API_KEY and OPENROUTER_API_KEY
+# then open .env and fill in KALSHI_API_KEY and GROQ_API_KEY
 
 # 3. Verify connectivity
 python cli.py health
@@ -50,7 +50,7 @@ python cli.py dashboard
 
 > **Need API keys?**
 > - Kalshi key + private key → [kalshi.com/account/settings](https://kalshi.com/account/settings)
-> - OpenRouter key → [openrouter.ai](https://openrouter.ai/)
+> - Groq key → [groq.ai](https://groq.ai/)
 
 ---
 
@@ -63,7 +63,7 @@ This repo gives you the building blocks. The example strategies use them — you
 | **Kalshi client** | Authenticated REST + WebSocket client (RSA signing, retries, rate-limit handling) | `src/clients/kalshi_client.py` |
 | **Market ingestion** | Pulls the full tradeable universe via the Events API, persists to SQLite | `src/jobs/ingest.py` |
 | **Position tracking** | Stop-loss, take-profit, time-based, and resolution-based exits with real Kalshi sell orders | `src/jobs/track.py` |
-| **LLM client** | Single OpenRouter API key, swap models with one config line, fallback chain on errors, persistent daily-cost tracker | `src/clients/openrouter_client.py`, `src/clients/xai_client.py` |
+| **LLM client** | Single Groq API key, swap models with one config line, fallback chain on errors, persistent daily-cost tracker | `src/clients/groq_client.py`, `src/clients/xai_client.py` |
 | **SQLite telemetry** | Every trade, AI decision, and cost metric logged locally | `src/utils/database.py` |
 | **Streamlit dashboard** | Real-time portfolio, positions, P&L, decision logs | `beast_mode_dashboard.py` |
 | **Paper trading** | Log signals against settled markets without sending orders | `paper_trader.py` |
@@ -80,7 +80,7 @@ Three strategies ship with the repo. **None of them is "the right answer."** The
 
 ### 1. AI Directional — `python cli.py run`
 
-The default. For each candidate market, it calls a single LLM via OpenRouter (with a fallback chain on errors) to score directional confidence, then sizes positions with fractional Kelly and applies category/sector guardrails.
+The default. For each candidate market, it calls a single LLM via Groq (with a fallback chain on errors) to score directional confidence, then sizes positions with fractional Kelly and applies category/sector guardrails.
 
 > **It is not a "5-model ensemble"** despite earlier README claims. One model is called per decision. The fallback chain only triggers on errors. The agents/ directory contains scaffolding for real parallel multi-model voting, but it's not wired into the live trading path. If you want a real ensemble, fork `src/jobs/decide.py` and build it.
 
@@ -139,7 +139,7 @@ python cli.py status
 
 - Python 3.12 or later
 - A [Kalshi](https://kalshi.com) account with API access ([API docs](https://trading-api.readme.io/reference/getting-started))
-- An [OpenRouter](https://openrouter.ai/) API key (only needed for the AI directional strategy)
+- An [Groq](https://groq.ai/) API key (only needed for the AI directional strategy)
 
 ### Automated Setup
 
@@ -174,7 +174,7 @@ cp env.template .env
 | Variable | Description |
 |---|---|
 | `KALSHI_API_KEY` | Your Kalshi API key ID |
-| `OPENROUTER_API_KEY` | OpenRouter key (only for AI directional strategy) |
+| `GROQ_API_KEY` | Groq key (only for AI directional strategy) |
 
 Place your Kalshi private key as `kalshi_private_key` (no extension) in the project root. Download it from [Kalshi Settings → API](https://kalshi.com/account/settings). It's git-ignored.
 
@@ -201,7 +201,7 @@ min_volume             = 500     # Minimum contract volume
 max_time_to_expiry_days = 14     # How far out to trade
 min_confidence_to_trade = 0.45   # Minimum AI confidence to enter
 
-# LLM (OpenRouter)
+# LLM (Groq)
 primary_model          = "anthropic/claude-sonnet-4.5"
 ai_temperature         = 0       # Deterministic
 ai_max_tokens          = 8000
@@ -212,7 +212,7 @@ max_drawdown           = 0.15    # Portfolio drawdown halt
 daily_ai_cost_limit    = 10.0    # Max daily LLM spend in USD
 ```
 
-**Swapping models:** change `primary_model` to any slug from [openrouter.ai/models](https://openrouter.ai/models). The fallback chain in `src/clients/openrouter_client.py` controls what happens when the primary errors.
+**Swapping models:** change `primary_model` to any slug from [groq.ai/models](https://groq.ai/models). The fallback chain in `src/clients/groq_client.py` controls what happens when the primary errors.
 
 **Controlling LLM spend:** the bot checks the daily limit before every API call and skips trading until the next calendar day once exhausted. Set `DAILY_AI_COST_LIMIT` in `.env` to override.
 
@@ -230,7 +230,7 @@ kalshi-ai-trading-bot/
 │
 ├── src/
 │   ├── agents/                # UNWIRED scaffolding for multi-agent debate (fork to use)
-│   ├── clients/               # Kalshi, OpenRouter, WebSocket clients
+│   ├── clients/               # Kalshi, Groq, WebSocket clients
 │   ├── config/                # Settings and trading parameters
 │   ├── data/                  # News + sentiment helpers (optional)
 │   ├── events/                # Async event bus
@@ -393,9 +393,9 @@ If you see "Paper trading mode" the flag isn't taking effect. Verify the API key
 </details>
 
 <details>
-<summary><strong>Model not found / OpenRouter API errors</strong></summary>
+<summary><strong>Model not found / Groq API errors</strong></summary>
 
-Model names on OpenRouter change. Update `primary_model` in `src/config/settings.py` with a current slug from [openrouter.ai/models](https://openrouter.ai/models), or set `PRIMARY_MODEL` in `.env`.
+Model names on Groq change. Update `primary_model` in `src/config/settings.py` with a current slug from [groq.ai/models](https://groq.ai/models), or set `PRIMARY_MODEL` in `.env`.
 
 </details>
 
@@ -464,7 +464,7 @@ git checkout -b feature/your-feature
 - [Kalshi Trading API](https://trading-api.readme.io/reference/getting-started)
 - [Kalshi API Authentication](https://trading-api.readme.io/reference/authentication)
 - [Kalshi Markets](https://kalshi.com/markets)
-- [OpenRouter Model Catalog](https://openrouter.ai/models)
+- [Groq Model Catalog](https://groq.ai/models)
 
 ---
 

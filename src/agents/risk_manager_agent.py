@@ -1,7 +1,7 @@
 """
 Risk Manager Agent -- evaluates risk/reward and recommends position sizing.
 
-Uses DeepSeek R1 (via OpenRouter) by default.  Focuses on:
+Uses DeepSeek R1 (via Groq) by default.  Focuses on:
 - Expected value calculation
 - Position sizing recommendation
 - Risk assessment (1-10 scale)

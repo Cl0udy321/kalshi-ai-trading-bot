@@ -181,7 +181,9 @@ class UnifiedAdvancedTradingSystem:
 
             if self.total_capital < 10:  # Minimum $10 to trade
                 self.logger.warning(f"⚠️ Total capital too low: ${self.total_capital:.2f} - may limit trading")
-
+                if not getattr(settings.trading, 'live_trading_enabled', False):
+                    self.logger.info("📝 Paper trading active with low balance. Mocking $1,000 capital for dry runs.")
+                    self.total_capital = 1000.0
         except Exception as e:
             self.logger.error(f"Failed to get portfolio value, using default: {e}")
             self.total_capital = 100  # Conservative fallback
@@ -247,7 +249,7 @@ class UnifiedAdvancedTradingSystem:
             # Step 1: Get ALL available markets (no time restrictions) - MORE PERMISSIVE VOLUME
             markets = await self.db_manager.get_eligible_markets(
             volume_min=200,  # DECREASED: Much lower volume requirement (was 50,000, now 200) for more opportunities
-            max_days_to_expiry=365  # Accept any timeline with dynamic exits
+            max_days_to_expiry=30  # Target 7-30 day payout window
         )
             if not markets:
                 self.logger.warning("No markets available for trading")

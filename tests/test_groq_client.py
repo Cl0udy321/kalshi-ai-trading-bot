@@ -1,14 +1,14 @@
-"""Tests for the OpenRouter multi-model client."""
+"""Tests for the Groq multi-model client."""
 
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.clients.openrouter_client import OpenRouterClient, MODEL_PRICING
+from src.clients.groq_client import GroqClient, MODEL_PRICING
 
 
-class TestOpenRouterClient:
-    """Tests for OpenRouterClient."""
+class TestGroqClient:
+    """Tests for GroqClient."""
 
     def test_model_pricing_registry(self):
         """Verify all expected models are in the pricing registry."""
@@ -29,17 +29,17 @@ class TestOpenRouterClient:
 
     def test_client_initialization(self):
         """Test client initializes with correct settings."""
-        with patch("src.clients.openrouter_client.settings") as mock_settings:
-            mock_settings.api.openrouter_api_key = "test-key"
-            mock_settings.api.openrouter_base_url = "https://openrouter.ai/api/v1"
+        with patch("src.clients.groq_client.settings") as mock_settings:
+            mock_settings.api.groq_api_key = "test-key"
+            mock_settings.api.groq_base_url = "https://groq.ai/api/v1"
             mock_settings.trading.daily_ai_cost_limit = 50.0
-            client = OpenRouterClient()
+            client = GroqClient()
             assert client.total_cost == 0.0
             assert client.request_count == 0
 
     def test_parse_trading_decision_valid_json(self):
         """Test parsing a valid JSON trading decision."""
-        client = OpenRouterClient.__new__(OpenRouterClient)
+        client = GroqClient.__new__(GroqClient)
         client._logger = MagicMock()
 
         response = '''Here is my analysis:
@@ -55,7 +55,7 @@ class TestOpenRouterClient:
 
     def test_parse_trading_decision_skip(self):
         """Test parsing a SKIP decision."""
-        client = OpenRouterClient.__new__(OpenRouterClient)
+        client = GroqClient.__new__(GroqClient)
         client._logger = MagicMock()
 
         response = '{"action": "SKIP", "side": "YES", "limit_price": 50, "confidence": 0.3, "reasoning": "No edge"}'
@@ -65,7 +65,7 @@ class TestOpenRouterClient:
 
     def test_parse_trading_decision_invalid(self):
         """Test parsing invalid response returns None."""
-        client = OpenRouterClient.__new__(OpenRouterClient)
+        client = GroqClient.__new__(GroqClient)
         client._logger = MagicMock()
 
         decision = client._parse_trading_decision("This is not JSON at all")
@@ -73,7 +73,7 @@ class TestOpenRouterClient:
 
     def test_fallback_chain_ordering(self):
         """Test that fallback chain has the requested model first."""
-        client = OpenRouterClient.__new__(OpenRouterClient)
+        client = GroqClient.__new__(GroqClient)
         client._logger = MagicMock()
 
         chain = client._build_fallback_chain("openai/o3")
@@ -83,7 +83,7 @@ class TestOpenRouterClient:
 
     def test_cost_summary(self):
         """Test cost summary generation."""
-        client = OpenRouterClient.__new__(OpenRouterClient)
+        client = GroqClient.__new__(GroqClient)
         client._logger = MagicMock()
         client.total_cost = 0.05
         client.request_count = 10

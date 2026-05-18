@@ -11,6 +11,7 @@ import math
 import time
 import uuid
 import sqlite3
+from src.utils.expiration_filter import filter_markets_by_expiration
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -44,14 +45,14 @@ SKIP_TITLE_PHRASES = [
 ]
 
 DEFAULT_MIN_VOLUME = 10
-DEFAULT_MIN_ASK = 0.70          
-DEFAULT_MIN_EDGE = 0.005        
+DEFAULT_MIN_ASK = 0.60          
+DEFAULT_MIN_EDGE = 0.002        
 DEFAULT_MAX_POSITION_PCT = 0.10    
 DEFAULT_USE_KELLY = True
 DEFAULT_MIN_CONFIDENCE = 0.25   
 
 # --- CRITICAL VALUE UPGRADE: CAPITAL VELOCITY FILTER ---
-DEFAULT_MAX_DAYS_TO_EXPIRY = 14  # Max 14 days so we never lock capital up long-term
+DEFAULT_MAX_DAYS_TO_EXPIRY = 10  # Max 10 days so we never lock capital up long-term
 
 # -----------------------------------------------------------------------
 # Core math
@@ -64,13 +65,14 @@ def should_skip(ticker: str) -> bool:
 def estimate_true_prob(last_price: float, hours_to_expiry: float) -> float:
     """
     Generalized exponential probability decay model.
-    Priors become slightly more certain (closer to 1.0) as expiry approaches.
+    Priors become more certain (closer to 1.0) as expiry approaches.
+    Uses a more aggressive certainty factor to find real edge.
     """
     if hours_to_expiry <= 0:
         return last_price
     
     decay_factor = math.exp(-hours_to_expiry / 168.0) # 1 week half-life
-    certainty_bonus = (1.0 - last_price) * 0.08 * decay_factor
+    certainty_bonus = (1.0 - last_price) * 0.25 * decay_factor
     
     return min(0.99, last_price + certainty_bonus)
 
@@ -212,6 +214,10 @@ class SafeCompounder:
             portfolio = 0
             cash = 60000 
 
+        if self.dry_run and cash == 0 and portfolio == 0:
+            logger.info("Real balance is zero. Injecting $600.00 mock bankroll for dry run.")
+            cash = 60000
+
         print(f"\n💰 Cash: ${cash/100:.2f} | Portfolio: ${portfolio/100:.2f} | "
               f"Total: ${(cash+portfolio)/100:.2f}\n", flush=True)
 
@@ -220,7 +226,14 @@ class SafeCompounder:
 
         print("\n📡 Step 1: Fetching all active markets...", flush=True)
         markets = await self._fetch_all_markets()
-        print(f"  Fetched {len(markets)} active markets", flush=True)
+        
+        # =========================================================================
+        # EXPIRATION FILTER INTEGRATION (7 to 10 days strict)
+        # =========================================================================
+        print(f"📥 Raw active markets fetched: {len(markets)}", flush=True)
+        markets = filter_markets_by_expiration(markets, min_days=7, max_days=10)
+        print(f"⏱️ Filtered down to {len(markets)} markets expiring strictly in 7-10 days.", flush=True)
+        # =========================================================================
 
         print(f"\n🔍 Step 2: Finding high-conviction short-term candidates (Price >= ${self.min_ask:.2f}, Expiry <= {self.max_days_to_expiry}d)...", flush=True)
         candidates = self._find_candidates(markets)
@@ -375,7 +388,9 @@ class SafeCompounder:
             except Exception: continue
 
             conf_score, conf_reason = market_confidence_score(ticker, ob, m)
-            if conf_score < self.min_confidence: continue
+            if conf_score < self.min_confidence:
+                print(f"  ❌ {ticker[:40]} — SKIPPED: low confidence ({conf_score:.2f} < {self.min_confidence}): {conf_reason}", flush=True)
+                continue
 
             yes_bids = ob.get("yes_dollars", ob.get("yes", []))
             no_bids = ob.get("no_dollars", ob.get("no", []))
@@ -394,7 +409,9 @@ class SafeCompounder:
                     lowest_ask = 1.0 - highest_no_bid
                 except (ValueError, TypeError): pass
 
-            if lowest_ask is None or lowest_ask < self.min_ask: continue
+            if lowest_ask is None or lowest_ask < self.min_ask:
+                print(f"  ❌ {ticker[:40]} — SKIPPED: ask too low or empty book (ask={lowest_ask}, min={self.min_ask})", flush=True)
+                continue
 
             print(f"📰 Safe Compounder querying live news: {market_title[:50]}...", flush=True)
             sentiment_tilt, news_summary = get_market_news_sentiment(market_title)
@@ -407,7 +424,9 @@ class SafeCompounder:
             adjusted_prob = min(0.99, max(0.01, adjusted_prob))
 
             edge = adjusted_prob - lowest_ask
-            if edge < self.min_edge: continue
+            if edge < self.min_edge:
+                print(f"  ❌ {ticker[:40]} — SKIPPED: edge too small (prob={adjusted_prob:.4f}, ask={lowest_ask:.4f}, edge={edge:.4f}, min={self.min_edge})", flush=True)
+                continue
 
             our_price = lowest_ask - 0.01  
             if our_price < self.min_ask: continue

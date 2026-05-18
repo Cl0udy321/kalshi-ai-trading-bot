@@ -51,7 +51,7 @@ class KalshiClient(TradingLoggerMixin):
             backoff_factor: Factor for exponential backoff
         """
         self.api_key = api_key or settings.api.kalshi_api_key
-        self.base_url = "https://demo-api.kalshi.co"
+        self.base_url = "https://external-api.kalshi.com"
         self.private_key_path = private_key_path or os.environ.get("KALSHI_PRIVATE_KEY_PATH", "kalshi_private_key.pem")
         self.private_key = None
         self.max_retries = max_retries
@@ -288,6 +288,12 @@ class KalshiClient(TradingLoggerMixin):
         """Get specific market data."""
         return await self._make_authenticated_request(
             "GET", f"/trade-api/v2/markets/{ticker}", require_auth=False
+        )
+
+    async def get_event(self, event_ticker: str) -> Dict[str, Any]:
+        """Get event data including URL slug for building Kalshi links."""
+        return await self._make_authenticated_request(
+            "GET", f"/trade-api/v2/events/{event_ticker}", require_auth=False
         )
     
     async def get_orderbook(self, ticker: str, depth: int = 100) -> Dict[str, Any]:

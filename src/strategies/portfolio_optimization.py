@@ -967,6 +967,10 @@ async def _evaluate_immediate_trade(
             balance_response = await kalshi_client.get_balance()
             available_cash = balance_response.get('balance', 0) / 100  # Convert cents to dollars
             
+            # If paper trading (live_trading_enabled is False) and balance is very low, mock it to $1,000
+            if not getattr(settings.trading, 'live_trading_enabled', False) and available_cash < 10.0:
+                available_cash = 1000.0
+            
             # Get current positions to calculate total portfolio value
             # Kalshi API v2 returns portfolio_value in balance response (in cents)
             total_position_value = balance_response.get('portfolio_value', 0) / 100  # Convert cents to dollars
@@ -1294,7 +1298,7 @@ async def run_portfolio_optimization(
         # Get markets
         markets = await db_manager.get_eligible_markets(
             volume_min=20000,  # Balanced volume for actual trading opportunities
-            max_days_to_expiry=365  # Accept any timeline with dynamic exits
+            max_days_to_expiry=30  # Target 7-30 day payout window
         )
         if not markets:
             logger.warning("No eligible markets for portfolio optimization")

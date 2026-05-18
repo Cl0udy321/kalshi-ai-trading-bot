@@ -638,7 +638,7 @@ async def run_market_making_strategy(
         # Get eligible markets (remove time restrictions!)
         markets = await db_manager.get_eligible_markets(
             volume_min=30000,  # Higher volume for market making (needs more liquidity)
-            max_days_to_expiry=365  # Accept any timeline
+            max_days_to_expiry=30  # Target 7-30 day payout window
         )
         
         if not markets:

@@ -67,10 +67,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         return
 
     # DEFAULT: AI directional strategy with disciplined settings active.
-    # Despite earlier README copy, this is a single-model OpenRouter call
+    # Despite earlier README copy, this is a single-model Groq call
     # per decision (with a fallback chain), not a parallel ensemble.
     print("🤖  AI DIRECTIONAL MODE (default)")
-    print("   Single-model OpenRouter call per decision (fallback chain on error).")
+    print("   Single-model Groq call per decision (fallback chain on error).")
     print("   Category scoring + portfolio guardrails active.")
     print("   Use --safe-compounder for conservative math-only mode.")
     print("   Use --beast to run without guardrails (not recommended).")
@@ -544,7 +544,7 @@ def cmd_health(args: argparse.Namespace) -> None:
 
     for var, placeholder in (
         ("KALSHI_API_KEY", "your_kalshi_api_key_here"),
-        ("OPENROUTER_API_KEY", "your_openrouter_api_key_here"),
+        ("GROQ_API_KEY", "your_groq_api_key_here"),
     ):
         val = os.getenv(var, "")
         if val and val not in ("", placeholder):
@@ -647,7 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Start the trading bot (disciplined mode by default)",
         description=(
             "Launch one of the example trading strategies. Default is the AI "
-            "directional strategy: a single LLM call per market via OpenRouter "
+            "directional strategy: a single LLM call per market via Groq "
             "(fallback chain on error), with category scoring and portfolio "
             "guardrails layered on top. Use --safe-compounder for the "
             "conservative math-only NO-side strategy. Use --beast to run "

@@ -1,6 +1,6 @@
 """
 AI-powered sentiment analysis for the Kalshi trading system.
-Uses OpenRouter (via the openai library) with a fast/cheap model to score
+Uses Groq (via the openai library) with a fast/cheap model to score
 news article sentiment relative to prediction market questions.
 """
 
@@ -53,15 +53,15 @@ class MarketSentiment:
 
 class SentimentAnalyzer(TradingLoggerMixin):
     """
-    AI-powered sentiment scorer using OpenRouter with a fast/cheap model.
+    AI-powered sentiment scorer using Groq with a fast/cheap model.
     Analyses news articles for sentiment relative to prediction market questions,
     caches results, and tracks API cost.
     """
 
     def __init__(self, news_aggregator: Optional[NewsAggregator] = None) -> None:
         self._client = AsyncOpenAI(
-            api_key=settings.api.openrouter_api_key,
-            base_url=settings.api.openrouter_base_url,
+            api_key=settings.api.groq_api_key,
+            base_url=settings.api.groq_base_url,
             timeout=30.0,
             max_retries=2,
         )
@@ -300,7 +300,7 @@ class SentimentAnalyzer(TradingLoggerMixin):
             # Track cost
             input_tokens = response.usage.prompt_tokens if response.usage else 0
             output_tokens = response.usage.completion_tokens if response.usage else 0
-            # Gemini Flash via OpenRouter is very cheap; approximate pricing
+            # Gemini Flash via Groq is very cheap; approximate pricing
             cost = (input_tokens * 0.0000001) + (output_tokens * 0.0000004)
             self.total_cost += cost
             self.request_count += 1

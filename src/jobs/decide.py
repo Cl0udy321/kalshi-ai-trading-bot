@@ -3,7 +3,7 @@
 Trading decision job - analyzes markets and generates trading decisions.
 
 This module wires the LLM-driven directional strategy. It uses the
-single-model OpenRouter pipeline (xai_client → openrouter_client) for
+single-model Groq pipeline (xai_client → groq_client) for
 the actual decision call. A multi-agent ensemble path used to live
 here but was never wired through trade.py — it's been removed; if you
 want to bring back parallel multi-model voting, fork this module and
@@ -265,7 +265,7 @@ async def make_decision_for_market(
             )
             return None
 
-        # --- LLM Decision (single-model via OpenRouter fallback chain) ---
+        # --- LLM Decision (single-model via Groq fallback chain) ---
         decision = await xai_client.get_trading_decision(
             market_data=market_data,
             portfolio_data=portfolio_data,

@@ -1,12 +1,18 @@
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 import asyncio
 import logging
 import time
 import uuid
+from src.utils.expiration_filter import filter_markets_by_expiration
 from datetime import datetime, timezone
 from typing import Dict, List
 
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager, Position
+from src.data.sentiment_analyzer import SentimentAnalyzer
 
 # --- SPECULATIVE RISK PARAMETERS ---
 MAX_RISK_PER_TRADE = 20.00  # Cap risk to a flat $20.00 per trade to protect bankroll
@@ -20,10 +26,14 @@ async def run_risky_strategy():
     print("🔥 INITIALIZING DEMO-OPTIMIZED RISKY FLIPPER...")
     client = KalshiClient()
     db_manager = DatabaseManager(db_path="trading_system.db")
+    sentiment_analyzer = SentimentAnalyzer()
     await db_manager.initialize()
 
     bal = await client.get_balance()
     cash = bal.get("balance", 0) / 100.0
+    from src.config.settings import settings
+    if not getattr(settings.trading, 'live_trading_enabled', False) and cash < 10.0:
+        cash = 1000.0
     print(f"💰 Available Cash: ${cash:.2f}")
 
     print("📡 Fetching active markets from Kalshi API...")
@@ -62,6 +72,14 @@ async def run_risky_strategy():
         except Exception as e:
             print(f"⚠️ Error fetching page {page}: {e}")
             break
+
+    # =========================================================================
+    # WIDENED EXPIRATION FILTER: 0 to 36500 days
+    # =========================================================================
+    print(f"📥 Raw markets fetched: {len(all_markets)}")
+    all_markets = filter_markets_by_expiration(all_markets, min_days=0, max_days=36500)
+    print(f"⏱️ Filtered down to {len(all_markets)} markets expiring in the next 36500 days.")
+    # =========================================================================
 
     print(f"🔍 Analyzing {len(all_markets)} open markets for speculative risk profiles...")
     now = datetime.now(timezone.utc)
@@ -122,17 +140,47 @@ async def run_risky_strategy():
 
     print(f"📊 Speculative Grading Complete. Filtering duplicate selections...")
     
-    placed = 0
+    # Pre-filter valid candidates to avoid hitting the API for already held positions
+    valid_candidates = []
     for item in scored_candidates:
+        if item["ticker"] not in pos_tickers:
+            valid_candidates.append(item)
+        if len(valid_candidates) >= 20:
+            break
+            
+    print(f"📰 Fetching latest news for sentiment analysis on top {len(valid_candidates)} candidates...")
+    await sentiment_analyzer._news.fetch_all()
+    
+    for item in valid_candidates:
+        market_title = item["market"].get("title", "")
+        
+        # Get market sentiment
+        relevant = sentiment_analyzer._news.get_relevant_articles(market_title, max_articles=5)
+        if relevant:
+            articles = [p[0] for p in relevant]
+            scores = [p[1] for p in relevant]
+            sentiment = await sentiment_analyzer.analyze_market_sentiment(market_title, articles, scores)
+            ws = sentiment.relevance_weighted_score
+            
+            # Apply Option A: Boost or penalize speculative score based on sentiment
+            # ws ranges from -1.0 to 1.0, we scale it to +/- 0.3 impact
+            sentiment_impact = ws * 0.3
+            item["speculative_score"] += sentiment_impact
+            item["sentiment_summary"] = sentiment_analyzer._format_summary(market_title, sentiment)
+        else:
+            item["sentiment_summary"] = "No relevant news found. Sentiment neutral."
+            
+    # Re-sort after sentiment adjustment
+    valid_candidates.sort(key=lambda x: -x["speculative_score"])
+    
+    placed = 0
+    for item in valid_candidates:
         if placed >= 12:
             break
             
         ticker = item["ticker"]
         m = item["market"]
         
-        if ticker in pos_tickers:
-            continue
-
         our_price = item["yes_last"]
         
         # Keep inside bounds
@@ -147,17 +195,20 @@ async def run_risky_strategy():
 
         print(f"  🔥 [DRY] YES x{contracts} @ ${our_price:.2f} | score: {item['speculative_score']:.2f} | expiry: {item['hours_to_expiry']:.1f}h | {ticker}")
         
+        rationale = (
+            f"High Variance Speculative Play. Priced at ${our_price:.2f} "
+            f"with {item['hours_to_expiry']:.1f} hours remaining. "
+            f"Speculative Grader Score: {item['speculative_score']:.2f}.\n\n"
+            f"{item['sentiment_summary']}"
+        )
+        
         pos = Position(
             market_id=ticker,
             side="YES",
             entry_price=our_price,
             quantity=contracts,
             timestamp=datetime.now(),
-            rationale=(
-                f"High Variance Speculative Play. Priced at ${our_price:.2f} "
-                f"with {item['hours_to_expiry']:.1f} hours remaining. "
-                f"Speculative Grader Score: {item['speculative_score']:.2f}."
-            ),
+            rationale=rationale,
             confidence=item['speculative_score'],  
             live=False,
             strategy="risky_flipper"
@@ -168,6 +219,8 @@ async def run_risky_strategy():
         cash -= (contracts * our_price)
 
     print(f"\n✅ Successfully queued {placed} active high-volatility risky trades to the GUI database!")
+    
+    await sentiment_analyzer.close()
 
 if __name__ == "__main__":
     asyncio.run(run_risky_strategy())

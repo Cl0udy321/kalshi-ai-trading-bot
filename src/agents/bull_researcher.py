@@ -1,7 +1,7 @@
 """
 Bull Researcher Agent -- makes the strongest possible case for YES.
 
-Uses GPT-4o (via OpenRouter) by default.  Focuses on:
+Uses GPT-4o (via Groq) by default.  Focuses on:
 - Arguments FOR the event happening
 - Supporting evidence
 - Probability floor estimate (lower bound for YES probability)

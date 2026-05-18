@@ -77,6 +77,14 @@ class BeastModeDashboard:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 print(f"🚀 BEAST MODE DASHBOARD - {now} 🚀")
                 print("=" * 60)
+
+                # Trading mode banner — always visible so users know their mode
+                paper_mode = getattr(settings.trading, 'paper_trading_mode', True)
+                if paper_mode:
+                    print("📝 PAPER MODE  — orders are simulated, no real money at risk")
+                else:
+                    print("🔴 LIVE MODE   — REAL MONEY IS BEING TRADED ON KALSHI")
+                print("=" * 60)
                 
                 # Get current performance
                 performance = await self.get_comprehensive_performance()
@@ -323,7 +331,12 @@ class BeastModeDashboard:
         
         try:
             available_markets = performance.get('available_markets', 0)
-            
+
+            # Trading mode — always shown so users know paper vs live
+            paper_mode = getattr(settings.trading, 'paper_trading_mode', True)
+            mode_label = "📝 PAPER MODE (simulated)" if paper_mode else "🔴 LIVE MODE (real money)"
+            print(f"💱 Trading Mode: {mode_label}")
+
             # System status indicators
             print(f"📊 Available Markets: {available_markets}")
             print(f"🔌 System Status: {'🟢 OPERATIONAL' if available_markets > 0 else '🔴 LIMITED'}")
@@ -412,6 +425,12 @@ class BeastModeDashboard:
         """Show quick performance summary."""
         print("🚀 BEAST MODE SUMMARY 🚀")
         print("=" * 40)
+
+        # Trading mode banner
+        paper_mode = getattr(settings.trading, 'paper_trading_mode', True)
+        mode_label = "📝 PAPER MODE (simulated)" if paper_mode else "🔴 LIVE MODE (real money)"
+        print(f"💱 Trading Mode: {mode_label}")
+        print()
         
         performance = await self.get_comprehensive_performance()
         
@@ -436,6 +455,8 @@ async def main():
     dashboard = BeastModeDashboard()
 
     try:
+        # Initialize the database first so all tables exist before any queries
+        await dashboard.db_manager.initialize()
         await dashboard.unified_system.async_initialize()
 
         if args.summary:

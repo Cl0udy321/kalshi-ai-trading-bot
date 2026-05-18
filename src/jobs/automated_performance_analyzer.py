@@ -419,7 +419,7 @@ Be concise and actionable. Focus on the top 3 priorities.
 """
 
         try:
-            # Use get_completion which delegates to OpenRouter
+            # Use get_completion which delegates to Groq
             response_content = await self.xai_client.get_completion(
                 prompt=analysis_prompt,
                 max_tokens=3000,

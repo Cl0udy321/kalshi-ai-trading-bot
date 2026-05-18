@@ -13,9 +13,9 @@ src/config/settings.py.
 This is one example strategy. Fork it to build your own.
 
 Usage:
-    python beast_mode_bot.py              # Paper trading mode (default)
-    python beast_mode_bot.py --live       # Live trading mode
-    python beast_mode_bot.py --dashboard  # Live dashboard mode
+    python directional_bot.py              # Paper trading mode (default)
+    python directional_bot.py --live       # Live trading mode
+    python directional_bot.py --dashboard  # Live dashboard mode
 
 Recommended: use cli.py for the unified CLI interface.
     python cli.py run                     # AI directional (default)
@@ -29,7 +29,7 @@ import signal
 from datetime import datetime, timedelta
 from typing import Optional
 
-from src.jobs.trade import run_trading_job
+from src.jobs.trade import _fallback_legacy_trading as run_trading_job
 from src.jobs.ingest import run_ingestion
 from src.jobs.track import run_tracking
 from src.jobs.evaluate import run_evaluation
@@ -39,14 +39,14 @@ from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.config.settings import settings
 
-# Import Beast Mode components
+# Import Directional AI components
 from src.strategies.unified_trading_system import run_unified_trading_system, TradingSystemConfig
 from scripts.beast_mode_dashboard import BeastModeDashboard
 
 
-class BeastModeBot:
+class DirectionalBot:
     """
-    Beast Mode Trading Bot - Advanced Multi-Strategy Trading System 🚀
+    Directional AI Trading Bot - Advanced Multi-Strategy Trading System 🚀
     
     This bot orchestrates all advanced strategies:
     1. Market Making (spread profits)
@@ -63,7 +63,7 @@ class BeastModeBot:
     def __init__(self, live_mode: bool = False, dashboard_mode: bool = False):
         self.live_mode = live_mode
         self.dashboard_mode = dashboard_mode
-        self.logger = get_trading_logger("beast_mode_bot")
+        self.logger = get_trading_logger("directional_bot")
         self.shutdown_event = asyncio.Event()
         
         # Set live trading in settings
@@ -72,7 +72,7 @@ class BeastModeBot:
         
         # Add detailed logging for debugging
         self.logger.info(
-            f"🚀 Beast Mode Bot initialized - "
+            f"🚀 Directional AI Bot initialized - "
             f"Mode: {'LIVE TRADING' if live_mode else 'PAPER TRADING'}"
         )
         self.logger.info(f"📊 CLI live_mode parameter: {live_mode}")
@@ -88,7 +88,7 @@ class BeastModeBot:
     async def run_dashboard_mode(self):
         """Run in live dashboard mode with real-time updates."""
         try:
-            self.logger.info("🚀 Starting Beast Mode Dashboard Mode")
+            self.logger.info("🚀 Starting Directional AI Dashboard Mode")
             dashboard = BeastModeDashboard()
             # Initialize the database so all tables exist before the dashboard queries them
             await dashboard.db_manager.initialize()
@@ -99,9 +99,9 @@ class BeastModeBot:
             self.logger.error(f"Error in dashboard mode: {e}")
 
     async def run_trading_mode(self):
-        """Run the Beast Mode trading system with all strategies."""
+        """Run the Directional AI trading system with all strategies."""
         try:
-            self.logger.info("🚀 BEAST MODE TRADING BOT STARTED")
+            self.logger.info("🚀 DIRECTIONAL AI TRADING BOT STARTED")
             self.logger.info(f"📊 Trading Mode: {'LIVE' if self.live_mode else 'PAPER'}")
             self.logger.info(f"💰 Daily AI Budget: ${settings.trading.daily_ai_budget}")
             self.logger.info(f"⚡ Features: Market Making + Portfolio Optimization + Dynamic Exits")
@@ -182,10 +182,10 @@ class BeastModeBot:
             await self.xai_client.close()
             await kalshi_client.close()
             
-            self.logger.info("🏁 Beast Mode Bot shut down gracefully")
+            self.logger.info("🏁 Directional AI Bot shut down gracefully")
             
         except Exception as e:
-            self.logger.error(f"Error in Beast Mode Bot: {e}")
+            self.logger.error(f"Error in Directional AI Bot: {e}")
             raise
 
     async def _ensure_database_ready(self, db_manager: DatabaseManager):
@@ -210,7 +210,7 @@ class BeastModeBot:
         """Background task for market data ingestion."""
         while not self.shutdown_event.is_set():
             try:
-                # Create a queue for market ingestion (though we're not using it in Beast Mode)
+                # Create a queue for market ingestion (though we're not using it in Directional AI)
                 market_queue = asyncio.Queue()
                 # ✅ FIXED: Pass the shared database manager
                 await run_ingestion(db_manager, market_queue)
@@ -220,7 +220,7 @@ class BeastModeBot:
                 await asyncio.sleep(60)
 
     async def _run_trading_cycles(self, db_manager: DatabaseManager, kalshi_client: KalshiClient):
-        """Main Beast Mode trading cycles."""
+        """Main Directional AI trading cycles."""
         cycle_count = 0
         
         while not self.shutdown_event.is_set():
@@ -232,9 +232,9 @@ class BeastModeBot:
                     continue
                 
                 cycle_count += 1
-                self.logger.info(f"🔄 Starting Beast Mode Trading Cycle #{cycle_count}")
+                self.logger.info(f"🔄 Starting Directional AI Trading Cycle #{cycle_count}")
                 
-                # Run the Beast Mode unified trading system
+                # Run the Directional AI unified trading system
                 results = await run_trading_job()
                 
                 if results and results.total_positions > 0:
@@ -334,7 +334,7 @@ class BeastModeBot:
                 await asyncio.sleep(300)
 
     async def run(self):
-        """Main entry point for Beast Mode Bot."""
+        """Main entry point for Directional AI Bot."""
         if self.dashboard_mode:
             await self.run_dashboard_mode()
         else:
@@ -344,16 +344,16 @@ class BeastModeBot:
 async def main():
     """Main entry point with command line argument parsing."""
     parser = argparse.ArgumentParser(
-        description="Beast Mode Trading Bot 🚀 - Advanced Multi-Strategy Trading System",
+        description="Directional AI Trading Bot 🚀 - Advanced Multi-Strategy Trading System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python beast_mode_bot.py              # Paper trading mode
-  python beast_mode_bot.py --live       # Live trading mode  
-  python beast_mode_bot.py --dashboard  # Live dashboard mode
-  python beast_mode_bot.py --live --log-level DEBUG  # Live mode with debug logs
+  python directional_bot.py              # Paper trading mode
+  python directional_bot.py --live       # Live trading mode  
+  python directional_bot.py --dashboard  # Live dashboard mode
+  python directional_bot.py --live --log-level DEBUG  # Live mode with debug logs
 
-Beast Mode Features:
+Directional AI Features:
   • Market Making (40% allocation) - Profit from spreads
   • Directional Trading (50% allocation) - AI predictions with portfolio optimization
   • Arbitrage Detection (10% allocation) - Cross-market opportunities
@@ -411,8 +411,8 @@ Beast Mode Features:
         print("💰 This will use real money and place actual trades!")
         print("🚀 LIVE TRADING MODE CONFIRMED")
     
-    # Create and run Beast Mode Bot
-    bot = BeastModeBot(live_mode=args.live, dashboard_mode=args.dashboard)
+    # Create and run Directional AI Bot
+    bot = DirectionalBot(live_mode=args.live, dashboard_mode=args.dashboard)
     await bot.run()
 
 
@@ -420,7 +420,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n👋 Beast Mode Bot stopped by user")
+        print("\n👋 Directional AI Bot stopped by user")
     except Exception as e:
-        print(f"❌ Beast Mode Bot error: {e}")
+        print(f"❌ Directional AI Bot error: {e}")
         raise 

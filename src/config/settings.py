@@ -18,24 +18,24 @@ class APIConfig:
     kalshi_api_key: str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY", ""))
     kalshi_base_url: str = "https://api.elections.kalshi.com"  # Updated to new API endpoint
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
-    openrouter_api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
+    groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
     openai_base_url: str = "https://api.openai.com/v1"
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
 
-    # xai_api_key removed — all models now route through OpenRouter
+    # xai_api_key removed — all models now route through Groq
 
 
 @dataclass
 class EnsembleConfig:
     """Multi-model ensemble configuration."""
     enabled: bool = True
-    # Model roster for ensemble decisions — all via OpenRouter (April 2026)
+    # Model roster for ensemble decisions — all via Groq (April 2026)
     models: Dict[str, Dict] = field(default_factory=lambda: {
-        "google/gemini-2.0-flash-exp:free": {"provider": "openrouter", "role": "lead_analyst", "weight": 0.30},
-        "google/gemini-3.1-pro": {"provider": "openrouter", "role": "forecaster", "weight": 0.30},
-        "openai/gpt-5.4": {"provider": "openrouter", "role": "risk_manager", "weight": 0.20},
-        "deepseek/deepseek-v3.2": {"provider": "openrouter", "role": "bull_researcher", "weight": 0.10},
-        "x-ai/grok-4.1-fast": {"provider": "openrouter", "role": "bear_researcher", "weight": 0.10},
+        "llama-3.1-8b-instant": {"provider": "groq", "role": "lead_analyst", "weight": 0.30},
+        "llama-3.1-70b-versatile": {"provider": "groq", "role": "forecaster", "weight": 0.30},
+        "mixtral-8x7b-32768": {"provider": "groq", "role": "risk_manager", "weight": 0.20},
+        "gemma2-9b-it": {"provider": "groq", "role": "bull_researcher", "weight": 0.10},
+        "llama3-groq-70b-8192-tool-use-preview": {"provider": "groq", "role": "bear_researcher", "weight": 0.10},
     })
     min_models_for_consensus: int = 3
     disagreement_threshold: float = 0.25  # Std dev above this = low confidence
@@ -48,14 +48,14 @@ class EnsembleConfig:
 @dataclass
 class SentimentConfig:
     """News and sentiment analysis configuration."""
-    enabled: bool = False
+    enabled: bool = True
     rss_feeds: List[str] = field(default_factory=lambda: [
         "https://feeds.reuters.com/reuters/topNews",
         "https://feeds.reuters.com/reuters/businessNews",
         "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
         "https://feeds.bbci.co.uk/news/business/rss.xml",
     ])
-    sentiment_model: str = "openrouter/free"  # Fast/cheap for sentiment ($0.25/M)
+    sentiment_model: str = "llama-3.1-8b-instant"  # Fast/cheap for sentiment ($0.25/M)
     cache_ttl_minutes: int = 30
     max_articles_per_source: int = 10
     relevance_threshold: float = 0.3
@@ -95,8 +95,8 @@ class TradingConfig:
     scan_interval_seconds: int = 60      # SANE: 60-second scan interval (was 30)
     
     # AI model configuration
-    primary_model: str = "openrouter/free"  # Primary model via OpenRouter
-    fallback_model: str = "openrouter/free"  # Fallback model via OpenRouter
+    primary_model: str = "llama-3.1-8b-instant"  # Primary model via Groq
+    fallback_model: str = "llama-3.1-8b-instant"  # Fallback model via Groq
     ai_temperature: float = 0  # Lower temperature for more consistent JSON output
     ai_max_tokens: int = 8000    # Reasonable limit for reasoning models (grok-4 works better with 8000)
     

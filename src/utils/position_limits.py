@@ -264,7 +264,10 @@ class PositionLimitsManager:
                     position_value = abs(quantity) * 0.50  # Conservative estimate
                     total_position_value += position_value
             
-            return available_cash + total_position_value
+            total_value = available_cash + total_position_value
+            if total_value < 10 and not getattr(settings.trading, 'live_trading_enabled', False):
+                return 1000.0
+            return total_value
             
         except Exception as e:
             self.logger.error(f"Error calculating portfolio value: {e}")
@@ -274,7 +277,10 @@ class PositionLimitsManager:
         """Get available cash balance."""
         try:
             balance_response = await self.kalshi_client.get_balance()
-            return balance_response.get('balance', 0) / 100
+            cash = balance_response.get('balance', 0) / 100
+            if cash < 10 and not getattr(settings.trading, 'live_trading_enabled', False):
+                return 1000.0
+            return cash
         except Exception as e:
             self.logger.error(f"Error getting available cash: {e}")
             return 0.0

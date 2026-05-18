@@ -127,10 +127,11 @@ async def execute_position(
             logger.error(f"❌ FAILED to place LIVE order for {position.market_id}: {e}")
             return False
     else:
-        # Simulate the trade
-        await db_manager.update_position_to_live(position.id, position.entry_price)
-        logger.info(f"📝 PAPER TRADE SIMULATED for {position.market_id} - No real money used")
-        logger.info(f"📊 Would have used: ${position.quantity * position.entry_price:.2f}")
+        # Paper trading: do NOT mark position as live (live=1).
+        # Leave live=0 so it appears in the Approval GUI for manual review.
+        # The user must click "Approve" in the GUI to mark it live and execute it.
+        logger.info(f"📝 PAPER TRADE QUEUED for {position.market_id} - Awaiting approval in GUI")
+        logger.info(f"📊 Would use: ${position.quantity * position.entry_price:.2f}")
         return True
 
 

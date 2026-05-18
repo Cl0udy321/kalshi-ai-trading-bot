@@ -886,7 +886,7 @@ class DatabaseManager(TradingLoggerMixin):
         """
         Increment the daily AI cost total in the database.
 
-        Called by xAI/OpenRouter clients after every API request so that the
+        Called by xAI/Groq clients after every API request so that the
         dashboard and evaluate job always reflect real spending — not just the
         in-memory pickle tracker.
 
